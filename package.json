@@ -1,0 +1,26 @@
+{
+  "name": "kelly-criterion-portfolio",
+  "version": "1.0.0",
+  "description": "Tools for applying Kelly Criterion to stock portfolio allocation",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "kelly-criterion",
+    "portfolio",
+    "stocks",
+    "finance",
+    "investment"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "chart.js": "^4.4.8",
+    "mathjs": "^14.3.1"
+  },
+  "engines": {
+    "node": ">=12.0.0"
+  }
+}
