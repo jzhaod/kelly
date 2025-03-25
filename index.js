@@ -5,144 +5,110 @@
  * to allocate capital across multiple assets.
  */
 
-// Import modules
-const { calculateKellyAllocation, printAllocations } = require('./kelly_criterion');
-const { 
-  runAdvancedKellyAllocation,
-  calculateAdvancedKelly,
-  fetchHistoricalData
-} = require('./advanced_kelly');
-const {
-  createAllocationChart,
-  createRiskReturnChart,
-  createCorrelationHeatmap,
-  simulatePortfolio,
-  createSimulationChart
-} = require('./visualization');
-
 // Define your investment universe
 const stocks = ['TSLA', 'NVDA', 'CPNG', 'SHOP', 'MELI'];
 
-// Example 1: Simple Kelly allocation using predefined estimates
-console.log('===== EXAMPLE 1: SIMPLE KELLY ALLOCATION =====');
+// Initialize the page when the DOM is loaded
+document.addEventListener('DOMContentLoaded', () => {
+  // Load stock data and initialize charts
+  loadStockData();
+  
+  // Set up event listeners
+  setupEventListeners();
+});
 
-// Expected annual returns (these are examples and not actual predictions)
-const expectedReturns = {
-  'TSLA': 0.15, // 15% expected annual return
-  'NVDA': 0.25, // 25% expected annual return
-  'CPNG': 0.12, // 12% expected annual return
-  'SHOP': 0.18, // 18% expected annual return
-  'MELI': 0.20  // 20% expected annual return
-};
-
-// Volatility (standard deviation of returns)
-const volatility = {
-  'TSLA': 0.55, // 55% annual volatility
-  'NVDA': 0.45, // 45% annual volatility
-  'CPNG': 0.40, // 40% annual volatility
-  'SHOP': 0.50, // 50% annual volatility
-  'MELI': 0.45  // 45% annual volatility
-};
-
-// Risk-free rate (approximate current Treasury yield)
-const riskFreeRate = 0.045; // 4.5%
-
-// Portfolio size
-const portfolioSize = 1000; // $1000 total investment
-
-// Calculate Kelly allocations
-const allocations = calculateKellyAllocation(
-  expectedReturns,
-  volatility,
-  riskFreeRate,
-  portfolioSize
-);
-
-// Print allocation results
-printAllocations(allocations);
-
-// Example 2: Advanced Kelly allocation with real data (async operation)
-console.log('\n===== EXAMPLE 2: ADVANCED KELLY ALLOCATION =====');
-console.log('This would normally fetch real data. Using simulated data for demo purposes...');
-
-// This function would get historical data and calculate allocations
-// To execute this in a real environment, you'd use:
-/*
-async function runAdvancedExample() {
+/**
+ * Loads stock data and initializes the page
+ */
+async function loadStockData() {
   try {
-    // You can adjust expected returns with your own views
-    const returnAdjustments = {
-      'TSLA': 0.03,  // Adjust Tesla's expected return up by 3%
-      'NVDA': 0.05   // Adjust NVIDIA's expected return up by 5%
-    };
+    const response = await fetch('/data-status');
+    if (!response.ok) {
+      throw new Error(`Failed to load stock data: ${response.status}`);
+    }
     
-    const results = await runAdvancedKellyAllocation(stocks, portfolioSize, returnAdjustments);
-    
-    // You could visualize the results here
-    console.log('Advanced Kelly allocation complete!');
+    const data = await response.json();
+    updateStockList(data.stocks);
   } catch (error) {
-    console.error('Error in advanced allocation:', error);
+    console.error('Error loading stock data:', error);
+    showError('Failed to load stock data. Please try again later.');
   }
 }
 
-// Run the advanced example
-runAdvancedExample();
-*/
-
-// Example 3: Visualizing portfolio allocation and simulating performance
-console.log('\n===== EXAMPLE 3: PORTFOLIO VISUALIZATION =====');
-console.log('This would create visualizations in a browser environment.');
-console.log('Showing text-based output for demonstration:');
-
-// Create simplified allocation chart output
-console.log('\nAllocation Chart:');
-// Convert allocations to a format compatible with visualization functions
-const visualizationAllocations = {};
-for (const symbol of stocks) {
-  visualizationAllocations[symbol] = allocations.fullKelly[symbol].percentage / 100;
+/**
+ * Updates the stock list with current data
+ */
+function updateStockList(stocks) {
+  const stockList = document.getElementById('stockList');
+  if (!stockList) return;
+  
+  stockList.innerHTML = '';
+  
+  Object.entries(stocks).forEach(([symbol, data]) => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${symbol}</td>
+      <td>${data.dataPoints || 0}</td>
+      <td>${formatDate(data.startDate)} to ${formatDate(data.endDate)}</td>
+      <td>${data.daysCovered || 0} days</td>
+      <td>
+        <span class="status-${getStatusClass(data)}">
+          ${getStatusText(data)}
+        </span>
+      </td>
+      <td>
+        <a href="stock_detail.html?symbol=${symbol}" class="btn btn-sm btn-primary">
+          View Details
+        </a>
+      </td>
+    `;
+    stockList.appendChild(row);
+  });
 }
-createAllocationChart(visualizationAllocations, 'allocationChart', 'Kelly Portfolio Allocation');
 
-// Create risk-return chart output
-console.log('\nRisk-Return Analysis:');
-createRiskReturnChart(stocks, expectedReturns, volatility, 'riskReturnChart');
+/**
+ * Sets up event listeners for the page
+ */
+function setupEventListeners() {
+  // Add any event listeners here
+}
 
-// Create a simplified correlation matrix for demonstration
-const correlationMatrix = [
-  [1.0, 0.6, 0.3, 0.5, 0.4], // TSLA
-  [0.6, 1.0, 0.4, 0.5, 0.5], // NVDA
-  [0.3, 0.4, 1.0, 0.6, 0.7], // CPNG
-  [0.5, 0.5, 0.6, 1.0, 0.7], // SHOP
-  [0.4, 0.5, 0.7, 0.7, 1.0]  // MELI
-];
+/**
+ * Shows an error message to the user
+ */
+function showError(message) {
+  const messageArea = document.getElementById('messageArea');
+  if (messageArea) {
+    messageArea.className = 'alert alert-danger';
+    messageArea.textContent = message;
+    messageArea.style.display = 'block';
+  }
+}
 
-// Create correlation heatmap output
-console.log('\nCorrelation Matrix:');
-createCorrelationHeatmap(stocks, correlationMatrix, 'correlationHeatmap');
+/**
+ * Formats a date string for display
+ */
+function formatDate(dateStr) {
+  if (!dateStr) return 'N/A';
+  return new Date(dateStr).toLocaleDateString();
+}
 
-// Example 4: Portfolio simulation
-console.log('\n===== EXAMPLE 4: PORTFOLIO SIMULATION =====');
-console.log('Running a simplified Monte Carlo simulation for portfolio performance...');
+/**
+ * Gets the status class for a stock's data
+ */
+function getStatusClass(data) {
+  if (!data.daysCovered) return 'incomplete';
+  if (data.daysCovered >= 1200) return 'complete';
+  if (data.daysCovered >= 500) return 'partial';
+  return 'incomplete';
+}
 
-// Run simulation with Kelly allocations
-const simulationResults = simulatePortfolio(
-  visualizationAllocations,
-  expectedReturns,
-  volatility,
-  correlationMatrix,
-  portfolioSize,
-  10, // 10 years
-  100  // 100 simulations (would use more in a real scenario)
-);
-
-// Create simulation chart output
-console.log('\nPortfolio Simulation Results:');
-createSimulationChart(simulationResults, 'simulationChart');
-
-console.log('\n===== ANALYSIS COMPLETE =====');
-console.log('Tips for Kelly Criterion implementation:');
-console.log('1. The full Kelly allocation maximizes long-term growth but can be highly volatile');
-console.log('2. Most practitioners use fractional Kelly (Half or Quarter) to reduce risk');
-console.log('3. Regularly update your estimates as market conditions change');
-console.log('4. Be careful with expected return estimates - they greatly impact the allocation');
-console.log('5. Consider your own risk tolerance when choosing between allocation strategies');
+/**
+ * Gets the status text for a stock's data
+ */
+function getStatusText(data) {
+  if (!data.daysCovered) return 'No Data';
+  if (data.daysCovered >= 1200) return 'Complete';
+  if (data.daysCovered >= 500) return 'Partial';
+  return 'Minimal';
+} 

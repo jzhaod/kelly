@@ -312,11 +312,10 @@ function updateDataStatusTable(data) {
 }
 
 /**
- * Fetches historical data for a new stock
+ * Checks the data folder for a new stock
  */
 function fetchNewStockData() {
   const symbol = newStockSymbol.value.trim().toUpperCase();
-  const years = parseInt(dataYears.value);
   
   if (!symbol) {
     showMessage('Please enter a stock symbol', 'error');
@@ -325,29 +324,29 @@ function fetchNewStockData() {
   
   // Show loading state
   fetchDataButton.disabled = true;
-  fetchDataButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Fetching...';
+  fetchDataButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Loading...';
   
-  // Send request to fetch data
+  // Send request to check data
   fetch('/fetch-historical-data', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ symbol, years })
+    body: JSON.stringify({ symbol })
   })
   .then(response => {
     if (response.ok) {
       return response.json();
     }
-    throw new Error('Failed to fetch historical data');
+    throw new Error('Failed to load historical data');
   })
   .then(data => {
     // Reset button
     fetchDataButton.disabled = false;
-    fetchDataButton.innerHTML = 'Fetch Historical Data';
+    fetchDataButton.innerHTML = 'Load Historical Data';
     
     if (data.success) {
-      showMessage(`Successfully fetched historical data for ${symbol}`, 'success');
+      showMessage(`Successfully loaded historical data for ${symbol}`, 'success');
       newStockSymbol.value = '';
       
       // Reload data status
@@ -356,45 +355,44 @@ function fetchNewStockData() {
           populateStockDropdowns(); // Refresh dropdowns after data operation
         });
     } else {
-      showMessage(data.error || 'Error fetching data', 'error');
+      showMessage(data.message || 'Error loading data', 'error');
     }
   })
   .catch(error => {
     // Reset button
     fetchDataButton.disabled = false;
-    fetchDataButton.innerHTML = 'Fetch Historical Data';
+    fetchDataButton.innerHTML = 'Load Historical Data';
     
     console.error('Error:', error);
-    showMessage('Error fetching data: ' + error.message, 'error');
+    showMessage('Error loading data: ' + error.message, 'error');
   });
 }
 
 /**
- * Refreshes historical data for a stock
+ * Refreshes data status for a stock
  * @param {Event} event - Click event
  */
 function refreshStockData(event) {
   const symbol = event.currentTarget.dataset.symbol;
-  const years = 5; // Default to 5 years
   
   // Show loading state
   event.currentTarget.disabled = true;
   const originalHTML = event.currentTarget.innerHTML;
   event.currentTarget.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
   
-  // Send request to fetch data
+  // Send request to check data
   fetch('/fetch-historical-data', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ symbol, years })
+    body: JSON.stringify({ symbol })
   })
   .then(response => {
     if (response.ok) {
       return response.json();
     }
-    throw new Error('Failed to refresh historical data');
+    throw new Error('Failed to refresh data status');
   })
   .then(data => {
     // Reset button
@@ -402,12 +400,12 @@ function refreshStockData(event) {
     event.currentTarget.innerHTML = originalHTML;
     
     if (data.success) {
-      showMessage(`Successfully refreshed historical data for ${symbol}`, 'success');
+      showMessage(`Successfully refreshed data status for ${symbol}`, 'success');
       
       // Reload data status
       loadDataStatus();
     } else {
-      showMessage(data.error || 'Error refreshing data', 'error');
+      showMessage(data.message || 'Error refreshing data status', 'error');
     }
   })
   .catch(error => {
@@ -416,12 +414,12 @@ function refreshStockData(event) {
     event.currentTarget.innerHTML = originalHTML;
     
     console.error('Error:', error);
-    showMessage('Error refreshing data: ' + error.message, 'error');
+    showMessage('Error refreshing data status: ' + error.message, 'error');
   });
 }
 
 /**
- * Displays data gaps for a stock
+ * Displays data gaps for a stock with note about local data mode
  * @param {Event} event - Click event
  */
 function viewGaps(event) {
@@ -446,7 +444,17 @@ function viewGaps(event) {
     })
     .then(data => {
       if (!data.stocks || !data.stocks[symbol] || !data.stocks[symbol].gaps || data.stocks[symbol].gaps.length === 0) {
-        modalBody.innerHTML = '<div class="alert alert-success">No data gaps found for this stock!</div>';
+        modalBody.innerHTML = `
+          <div class="alert alert-success">
+            <h5><i class="bi bi-check-circle-fill"></i> No data gaps found!</h5>
+            <p>Your local data for ${symbol} appears to be complete and continuous.</p>
+          </div>
+          <div class="alert alert-info">
+            <h5><i class="bi bi-info-circle-fill"></i> Local Data Mode</h5>
+            <p>This application now uses data directly from your local data directory. 
+            To maintain your data, edit the CSV files directly.</p>
+          </div>
+        `;
         fillGapsButton.style.display = 'none';
         return;
       }
@@ -455,11 +463,13 @@ function viewGaps(event) {
       
       // Create gaps table
       let tableHTML = `
-        <p>The following gaps were found in the historical data for ${symbol}:</p>
+        <div class="alert alert-warning">
+          <h5><i class="bi bi-exclamation-triangle-fill"></i> Data Gaps Detected</h5>
+          <p>The following gaps were found in the historical data for ${symbol}:</p>
+        </div>
         <table class="table table-sm">
           <thead>
             <tr>
-              <th>Select</th>
               <th>Start Date</th>
               <th>End Date</th>
               <th>Trading Days</th>
@@ -480,7 +490,6 @@ function viewGaps(event) {
         
         tableHTML += `
           <tr>
-            <td><input type="checkbox" class="gap-checkbox" value="${index}" checked></td>
             <td>${gap.start}</td>
             <td>${gap.end}</td>
             <td>${tradingDays}</td>
@@ -492,16 +501,25 @@ function viewGaps(event) {
           </tbody>
         </table>
         <div class="alert alert-info">
-          <i class="bi bi-info-circle"></i> Selecting gaps to fill and clicking "Fill Selected Gaps" will 
-          attempt to fetch the missing data for these periods.
+          <h5><i class="bi bi-info-circle-fill"></i> Local Data Mode</h5>
+          <p>This application now uses data directly from your local data directory. To fill gaps:</p>
+          <ol>
+            <li>Export your CSV file and open it in a spreadsheet application</li>
+            <li>Add the missing data for the dates listed above</li>
+            <li>Save the updated CSV file back to the data directory</li>
+            <li>Then click "Refresh Data Status" to update the application</li>
+          </ol>
         </div>
       `;
       
       modalBody.innerHTML = tableHTML;
       fillGapsButton.style.display = 'block';
+      fillGapsButton.textContent = 'Understood';
       
-      // Set up the fill gaps button
-      fillGapsButton.onclick = () => fillSelectedGaps(symbol, gaps);
+      // Set up the fill gaps button to just close the modal
+      fillGapsButton.onclick = () => {
+        $('#gapsModal').modal('hide');
+      };
     })
     .catch(error => {
       console.error('Error:', error);
@@ -511,88 +529,33 @@ function viewGaps(event) {
 }
 
 /**
- * Fills selected gaps for a stock
+ * Informs the user that gap filling is not needed with local data
  * @param {string} symbol - Stock symbol
  * @param {Array} gaps - Array of gap objects
  */
 function fillSelectedGaps(symbol, gaps) {
-  const selectedGaps = Array.from(document.querySelectorAll('.gap-checkbox:checked'))
-    .map(checkbox => parseInt(checkbox.value))
-    .map(index => gaps[index]);
-  
-  if (selectedGaps.length === 0) {
-    showMessage('No gaps selected', 'error');
-    return;
-  }
-  
   const modalBody = document.getElementById('gapsModalBody');
   const fillGapsButton = document.getElementById('fillGapsButton');
   
-  // Show loading state
-  modalBody.innerHTML = '<div class="text-center"><div class="spinner-border text-primary" role="status"></div><p class="mt-2">Filling data gaps...</p></div>';
-  fillGapsButton.disabled = true;
+  // Display information message
+  modalBody.innerHTML = `
+    <div class="alert alert-info">
+      <h5><i class="bi bi-info-circle-fill"></i> Local Data Mode</h5>
+      <p>Gap filling is not needed in local data mode. To fill gaps in your data:</p>
+      <ol>
+        <li>Export your CSV file and open it in a spreadsheet application</li>
+        <li>Fill in the missing data points manually or through interpolation</li>
+        <li>Save the updated CSV file back to the data directory</li>
+        <li>Then click "Refresh Data Status" to update the application</li>
+      </ol>
+      <p>This approach gives you more control over your historical data.</p>
+    </div>
+  `;
   
-  // Send request to fill gaps
-  fetch('/fill-data-gaps', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      symbol,
-      gaps: selectedGaps
-    })
-  })
-  .then(response => {
-    if (response.ok) {
-      return response.json();
-    }
-    throw new Error('Failed to fill data gaps');
-  })
-  .then(result => {
-    if (result.success) {
-      modalBody.innerHTML = `
-        <div class="alert alert-success">
-          <h5><i class="bi bi-check-circle-fill"></i> Gaps filled successfully!</h5>
-          <p>${result.message}</p>
-        </div>
-      `;
-      
-      showMessage(`Successfully filled gaps for ${symbol}`, 'success');
-      
-      // Reload data status after a short delay
-      setTimeout(() => {
-        loadDataStatus()
-          .then(() => {
-            populateStockDropdowns(); // Refresh dropdowns after data operation
-          });
-      }, 1500);
-    } else {
-      modalBody.innerHTML = `
-        <div class="alert alert-warning">
-          <h5><i class="bi bi-exclamation-triangle-fill"></i> Partial success</h5>
-          <p>${result.message}</p>
-          <p>Some gaps may remain. Please check the data status for details.</p>
-        </div>
-      `;
-      
-      // Reload data status after a short delay
-      setTimeout(() => {
-        loadDataStatus();
-      }, 1500);
-    }
-  })
-  .catch(error => {
-    console.error('Error:', error);
-    modalBody.innerHTML = `
-      <div class="alert alert-danger">
-        <h5><i class="bi bi-x-circle-fill"></i> Error</h5>
-        <p>Failed to fill data gaps: ${error.message}</p>
-      </div>
-    `;
-    
-    fillGapsButton.disabled = false;
-  });
+  // Reload data status just to refresh everything
+  setTimeout(() => {
+    loadDataStatus();
+  }, 1500);
 }
 
 /**
