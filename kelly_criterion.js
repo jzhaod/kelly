@@ -59,6 +59,7 @@ function calculateKellyAllocation(expectedReturns, volatility, riskFreeRate, por
   // Calculate normalized allocations
   const result = {
     fullKelly: {},
+    threeQuarterKelly: {},
     halfKelly: {},
     quarterKelly: {},
     rawKellyFractions: {...kellyFractions}
@@ -73,6 +74,15 @@ function calculateKellyAllocation(expectedReturns, volatility, riskFreeRate, por
     result.fullKelly[symbol] = {
       percentage: normalizedFraction * 100,
       dollars: dollarAmount
+    };
+    
+    // Three-Quarter Kelly (75% Kelly, 25% cash distributed equally)
+    const cashPerAssetThreeQuarter = (portfolioSize * 0.25) / symbols.length;
+    result.threeQuarterKelly[symbol] = {
+      percentage: normalizedFraction * 75,
+      dollars: dollarAmount * 0.75,
+      cashPercentage: 25 / symbols.length,
+      cashDollars: cashPerAssetThreeQuarter
     };
     
     // Half Kelly (50% Kelly, 50% cash distributed equally)
@@ -114,6 +124,17 @@ function printAllocations(allocations) {
     fullKellyTotal += alloc.percentage;
   }
   console.log(`Total: ${fullKellyTotal.toFixed(2)}%`);
+  
+  // Three-Quarter Kelly
+  console.log('\nThree-Quarter Kelly Allocation (Balanced Growth):');
+  console.log('------------------------------------');
+  let threeQuarterKellyTotal = 0;
+  for (const symbol of symbols) {
+    const alloc = allocations.threeQuarterKelly[symbol];
+    console.log(`${symbol}: ${alloc.percentage.toFixed(2)}% ($${alloc.dollars.toFixed(2)}) + Cash: ${alloc.cashPercentage.toFixed(2)}% ($${alloc.cashDollars.toFixed(2)})`);
+    threeQuarterKellyTotal += alloc.percentage + alloc.cashPercentage;
+  }
+  console.log(`Total: ${threeQuarterKellyTotal.toFixed(2)}%`);
   
   // Half Kelly
   console.log('\nHalf Kelly Allocation (Recommended for More Stability):');

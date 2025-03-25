@@ -25,7 +25,7 @@ function calculateAdvancedKelly(symbols, expectedReturns, volatility, correlatio
   // Example implementation using mathjs
   // In a real environment, uncomment and use these calculations
   
-  /*
+
   // Calculate covariance matrix
   const covarianceMatrix = math.zeros(symbols.length, symbols.length);
   
@@ -59,10 +59,10 @@ function calculateAdvancedKelly(symbols, expectedReturns, volatility, correlatio
   }
   
   return result;
-  */
+
   
   // For demonstration without mathjs, return the simplified Kelly calculation
-  return calculateSimplifiedKelly(symbols, expectedReturns, volatility, riskFreeRate);
+  //return calculateSimplifiedKelly(symbols, expectedReturns, volatility, riskFreeRate);
 }
 
 /**

@@ -21,7 +21,7 @@ For a multi-asset portfolio with correlations, the formula becomes more complex 
 ## Features
 
 - **Basic Kelly Allocation**: Calculate optimal allocation percentages for multiple stocks
-- **Fractional Kelly**: Implement Half Kelly and Quarter Kelly approaches for reduced volatility
+- **Fractional Kelly**: Implement Three-Quarter, Half, and Quarter Kelly approaches for different risk levels
 - **Advanced Kelly**: Account for correlations between assets (requires matrix operations)
 - **Visualization Tools**: Visualize allocations, risk-return relationships, and correlations
 - **Portfolio Simulation**: Run Monte Carlo simulations to project potential portfolio performance
@@ -99,7 +99,10 @@ Total: 100.00%
 ## Important Notes
 
 1. The Kelly Criterion is highly sensitive to input parameters, especially expected returns.
-2. Full Kelly can lead to significant drawdowns. Many practitioners use Half Kelly or Quarter Kelly.
+2. Full Kelly can lead to significant drawdowns. Many practitioners use fractional Kelly strategies:
+   - Three-Quarter Kelly (75%): Balance between growth and security
+   - Half Kelly (50%): Commonly used balance of risk and return
+   - Quarter Kelly (25%): Very conservative approach
 3. The advanced implementation requires matrix operations, which is why `mathjs` is recommended.
 4. These are theoretical allocations and should be combined with your own risk management strategy.
 5. The visualization functions require a browser environment and a library like Chart.js.
@@ -129,3 +132,28 @@ node index.js
 - Implement more sophisticated return estimation methods
 - Create a web interface for interactive portfolio allocation
 - Add support for additional asset classes beyond stocks
+
+## Historical Data Feature
+
+This toolkit includes a feature to calculate volatility and expected returns based on actual historical price data. To use this feature:
+
+1. Through the web interface:
+   - Navigate to the Stock Settings page 
+   - Click the "Update from Historical Data" button
+   - The application will fetch the last 5 years of price data from Yahoo Finance 
+   - Volatility and expected returns will be calculated based on this real data
+
+2. From the command line:
+   ```
+   npm run update-data
+   ```
+   or specify certain stocks:
+   ```
+   npm run update-data AAPL MSFT GOOG
+   ```
+
+The historical data functionality:
+- Uses 5 years of daily price data (when available)
+- Calculates annualized volatility from daily price movements
+- Calculates expected returns based on historical performance, with some adjustments to be more forward-looking
+- Caches the price data for 7 days to minimize external API requests

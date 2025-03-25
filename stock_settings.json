@@ -1,0 +1,29 @@
+{
+  "stocks": {
+    "TSLA": {
+      "expectedReturn": 35,
+      "volatility": 55
+    },
+    "NVDA": {
+      "expectedReturn": 40,
+      "volatility": 45
+    },
+    "CPNG": {
+      "expectedReturn": 20,
+      "volatility": 50
+    },
+    "SHOP": {
+      "expectedReturn": 25,
+      "volatility": 50
+    },
+    "MELI": {
+      "expectedReturn": 30,
+      "volatility": 45
+    },
+    "RIVN": {
+      "expectedReturn": 15,
+      "volatility": 40
+    }
+  },
+  "riskFreeRate": 4.5
+}

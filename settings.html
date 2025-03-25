@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kelly Criterion Stock Settings</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <style>
+        .form-control, .form-select {
+            min-width: 100px;
+            max-width: 250px;
+        }
+        input[type="number"].form-control {
+            max-width: 150px;
+        }
+        table input[type="number"].form-control {
+            width: 120px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container py-4">
+        <div class="row mb-4">
+            <div class="col">
+                <h1 class="display-4 mb-4">Kelly Criterion Stock Settings</h1>
+            </div>
+        </div>
+        
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="btn-toolbar" role="toolbar">
+                    <div class="btn-group me-2" role="group">
+                        <a href="index.html" class="btn btn-primary"><i class="bi bi-arrow-left"></i> Return to Portfolio Visualization</a>
+                    </div>
+                    <div class="btn-group me-2" role="group">
+                        <a href="historical_data_management.html" class="btn btn-info"><i class="bi bi-clock-history"></i> Historical Data Management</a>
+                    </div>
+                    <div class="btn-group me-2" role="group">
+                        <button id="loadDefaultsButton" class="btn btn-outline-secondary">Load Default Settings</button>
+                        <button id="loadSavedButton" class="btn btn-outline-secondary">Load Saved Settings</button>
+                    </div>
+                    <div class="btn-group" role="group">
+                        <button id="saveSettingsButton" class="btn btn-success">Save Current Settings</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header bg-light">
+                        <h5 class="card-title mb-0">Use Historical Data</h5>
+                    </div>
+                    <div class="card-body">
+                        <p>Update stock parameters based on historical price data from Yahoo Finance. This will calculate actual volatility and expected returns from the last 5 years of price movements.</p>
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle"></i> For more advanced data management, use the <a href="historical_data_management.html" class="alert-link">Historical Data Management</a> page, where you can:
+                            <ul>
+                                <li>View data status for each stock</li>
+                                <li>Add/manage historical data for individual stocks</li>
+                                <li>Recalculate volatility from existing data without re-downloading</li>
+                            </ul>
+                        </div>
+                        <div class="d-flex gap-2 align-items-center">
+                            <button id="updateHistoricalDataButton" class="btn btn-info">
+                                <i class="bi bi-clock-history"></i> Quick Update from Historical Data
+                            </button>
+                            <div id="historicalDataSpinner" class="spinner-border text-info d-none" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                        </div>
+                        <div id="historicalDataResult" class="mt-3"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="messageArea" class="alert d-none mb-4"></div>
+        
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header bg-light">
+                        <h5 class="card-title mb-0">Stock Parameters</h5>
+                    </div>
+                    <div class="card-body">
+                        <p class="card-text">Adjust the expected returns and volatility values for each stock.</p>
+                        
+                        <div class="table-responsive mb-4">
+                            <table class="table table-striped table-hover" id="stockTable">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Stock Symbol</th>
+                                        <th>Expected Annual Return (%)</th>
+                                        <th>Annual Volatility (%)</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="stockTableBody">
+                                    <!-- Stock rows will be added here dynamically -->
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <div class="card bg-light">
+                            <div class="card-header">
+                                <h5 class="card-title mb-0">Add New Stock</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="row g-3">
+                                    <div class="col-md-4">
+                                        <label for="newStockSymbol" class="form-label">Stock Symbol</label>
+                                        <input type="text" class="form-control" id="newStockSymbol" placeholder="e.g., AAPL" style="min-width: 100px; max-width: 150px;">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="newStockReturn" class="form-label">Expected Return (%)</label>
+                                        <input type="number" class="form-control" id="newStockReturn" placeholder="e.g., 15" step="0.1" min="0" max="100" style="min-width: 100px; max-width: 150px;">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="newStockVolatility" class="form-label">Volatility (%)</label>
+                                        <input type="number" class="form-control" id="newStockVolatility" placeholder="e.g., 30" step="0.1" min="0" max="100" style="min-width: 100px; max-width: 150px;">
+                                    </div>
+                                    <div class="col-12">
+                                        <button id="addStockButton" class="btn btn-primary">Add Stock</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header bg-light">
+                        <h5 class="card-title mb-0">Risk-Free Rate</h5>
+                    </div>
+                    <div class="card-body">
+                        <p class="card-text">Set the risk-free rate used in Kelly calculations.</p>
+                        <div class="mb-3">
+                            <label for="riskFreeRate" class="form-label">Risk-Free Rate (%):</label>
+                            <input type="number" class="form-control" id="riskFreeRate" value="4.5" min="0" max="20" step="0.1" style="min-width: 100px; max-width: 150px;">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap Bundle with Popper -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="settings.js"></script>
+</body>
+</html>
