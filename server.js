@@ -463,6 +463,9 @@ const server = http.createServer((req, res) => {
     return;
   }
   
+  // Import the data provider module
+  const { createDataProvider } = require('./data_provider');
+  
   // Handle data availability endpoint
   if (req.method === 'GET' && req.url.startsWith('/data-availability')) {
     // Parse symbol from query parameters
@@ -475,39 +478,34 @@ const server = http.createServer((req, res) => {
       return;
     }
     
-    const dataDir = path.join(__dirname, 'data');
-    let dataPath = path.join(dataDir, `${symbol}.json`);
-    let metricsPath = path.join(dataDir, `${symbol}_metrics.json`);
-    
-    // Check for JSON file first
-    fs.access(dataPath, fs.constants.F_OK, (jsonErr) => {
-      if (jsonErr) {
-        // If JSON doesn't exist, check for CSV
-        dataPath = path.join(dataDir, `${symbol}.csv`);
-        fs.access(dataPath, fs.constants.F_OK, (csvErr) => {
-          if (csvErr) {
-            // Neither JSON nor CSV exists
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-              symbol,
-              dataPoints: 0,
-              startDate: null,
-              endDate: null,
-              daysCovered: 0,
-              metrics: null,
-              error: 'No data found for this symbol'
-            }));
-            return;
-          } else {
-            // CSV exists, process it
-            processDataFile(symbol, dataPath, metricsPath, 'csv', res);
-          }
+    try {
+      // Use the data provider to get complete stock data
+      createDataProvider(symbol)
+        .then(provider => provider.getCompleteData())
+        .then(stockData => {
+          // Return the data
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(stockData));
+        })
+        .catch(error => {
+          // Handle errors
+          console.error(`Error loading data for ${symbol}:`, error);
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            symbol,
+            dataPoints: 0,
+            startDate: null,
+            endDate: null,
+            daysCovered: 0,
+            metrics: null,
+            error: error.message || 'No data found for this symbol'
+          }));
         });
-      } else {
-        // JSON exists, process it
-        processDataFile(symbol, dataPath, metricsPath, 'json', res);
-      }
-    });
+    } catch (error) {
+      console.error(`Error processing request for ${symbol}:`, error);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Internal server error' }));
+    }
     
     return;
   }
@@ -532,48 +530,41 @@ const server = http.createServer((req, res) => {
           return;
         }
         
-        // Get the historical data
-        readHistoricalDataFromJson(symbol)
-          .then(async result => {
-            console.log(`Got data for ${symbol}:`, result.summary);
+        // Use data provider to get the historical data
+        createDataProvider(symbol)
+          .then(async provider => {
+            // Get the price data
+            const data = await provider.getData();
+            const metadata = await provider.getMetadata();
             
-            if (!result.data || result.summary.dataPoints < 30) {
+            console.log(`Got data for ${symbol}: ${data.length} data points`);
+            
+            if (!data || data.length < 30) {
               res.writeHead(400, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({ 
                 error: 'Insufficient data',
-                message: `Need at least 30 data points for ${symbol}, but only have ${result.summary ? result.summary.dataPoints : 0}`
+                message: `Need at least 30 data points for ${symbol}, but only have ${data ? data.length : 0}`
               }));
               return;
             }
             
-            // Prepare returns data
-            let returnsArray = [];
+            // Calculate daily returns from prices
+            const returnsArray = [];
             
-            // Check if data is an array of objects with Adj Close/Close
-            if (Array.isArray(result.data)) {
-              // Sort data by date just to be sure
-              result.data.sort((a, b) => new Date(a.Date) - new Date(b.Date));
+            // Sort data by date just to be sure
+            data.sort((a, b) => new Date(a.Date) - new Date(b.Date));
+            
+            // Calculate daily returns from prices
+            for (let i = 1; i < data.length; i++) {
+              const prevPrice = data[i-1]['Adj Close'] || data[i-1].Close;
+              const currPrice = data[i]['Adj Close'] || data[i].Close;
               
-              // Calculate daily returns from prices
-              for (let i = 1; i < result.data.length; i++) {
-                const prevPrice = result.data[i-1]['Adj Close'] || result.data[i-1].Close;
-                const currPrice = result.data[i]['Adj Close'] || result.data[i].Close;
-                
-                if (prevPrice && currPrice) {
-                  returnsArray.push({
-                    date: result.data[i].Date,
-                    return: currPrice / prevPrice - 1
-                  });
-                }
+              if (prevPrice && currPrice && prevPrice > 0) {
+                returnsArray.push({
+                  date: data[i].Date,
+                  return: currPrice / prevPrice - 1
+                });
               }
-            } 
-            // Check if data has returns property
-            else if (result.data.returns && Array.isArray(result.data.returns)) {
-              // Format returns as array of objects
-              returnsArray = result.data.returns.map((ret, i) => ({
-                date: result.data.dates[i + 1], // Return is for the second day in each pair
-                return: ret
-              }));
             }
             
             if (returnsArray.length < 30) {
@@ -617,7 +608,7 @@ const server = http.createServer((req, res) => {
               volatility,
               expectedReturn: adjustedReturn,
               originalExpectedReturn: expectedReturn,
-              daysCovered: result.summary.daysCovered,
+              daysCovered: metadata.daysCovered,
               synthetic: false
             };
             
@@ -766,16 +757,52 @@ function parseStockData(dataContent, fileType) {
         // Check if records have Date field
         if (dataPoints > 0 && parsedData[0].Date) {
           // Sort by date to ensure correct order
-          parsedData.sort((a, b) => new Date(a.Date) - new Date(b.Date));
+          // Use manual sorting to avoid potential stack overflow with large arrays
+          const dateStrs = [];
+          const itemsByDate = {};
           
-          startDate = parsedData[0].Date;
-          endDate = parsedData[dataPoints - 1].Date;
+          for (let i = 0; i < parsedData.length; i++) {
+            const item = parsedData[i];
+            if (item && item.Date) {
+              const dateStr = String(item.Date);
+              dateStrs.push(dateStr);
+              itemsByDate[dateStr] = item;
+            }
+          }
           
-          // Calculate days covered
-          if (startDate && endDate) {
-            const start = new Date(startDate);
-            const end = new Date(endDate);
-            daysCovered = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+          // Sort date strings
+          dateStrs.sort();
+          
+          // Rebuild parsed data in date order
+          if (dateStrs.length > 0) {
+            startDate = dateStrs[0];
+            endDate = dateStrs[dateStrs.length - 1];
+            
+            // If date strings are available but not all items have corresponding dates
+            // we'll keep the original parsedData to avoid data loss
+            if (dateStrs.length === parsedData.length) {
+              // Safe to rebuild the array
+              const sortedData = [];
+              for (let i = 0; i < dateStrs.length; i++) {
+                sortedData.push(itemsByDate[dateStrs[i]]);
+              }
+              parsedData = sortedData;
+            }
+            
+            // Calculate days covered
+            if (startDate && endDate) {
+              const start = new Date(startDate);
+              const end = new Date(endDate);
+              if (!isNaN(start) && !isNaN(end)) {
+                daysCovered = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+              } else {
+                // Fallback if dates are invalid
+                daysCovered = Math.ceil(dataPoints * 7 / 5); // trading days -> calendar days
+              }
+            }
+          } else {
+            // No valid dates, estimate from array length
+            daysCovered = Math.ceil(dataPoints * 7 / 5); // trading days -> calendar days
           }
         } else {
           // No Date field, estimate from array length
@@ -822,26 +849,91 @@ function parseStockData(dataContent, fileType) {
         // Get headers
         const headers = lines[0].split(',');
         const dateIndex = headers.indexOf('Date');
+        const closeIndex = headers.indexOf('Close');
+        const adjCloseIndex = headers.indexOf('Adj Close');
         
         if (dateIndex !== -1) {
           dataPoints = lines.length - 1; // Subtract header
           
-          // Sort by date
-          const sortedLines = lines.slice(1).sort((a, b) => {
-            const dateA = new Date(a.split(',')[dateIndex]);
-            const dateB = new Date(b.split(',')[dateIndex]);
-            return dateA - dateB;
-          });
+          // Collect data for sorting
+          const dataWithDates = [];
           
-          if (sortedLines.length > 0) {
-            startDate = sortedLines[0].split(',')[dateIndex];
-            endDate = sortedLines[sortedLines.length - 1].split(',')[dateIndex];
+          for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            
+            const fields = line.split(',');
+            if (fields.length <= dateIndex) continue;
+            
+            const dateStr = fields[dateIndex];
+            if (!dateStr) continue;
+            
+            try {
+              const date = new Date(dateStr);
+              if (!isNaN(date.getTime())) {
+                dataWithDates.push({
+                  date,
+                  dateStr,
+                  line
+                });
+              }
+            } catch (e) {
+              // Skip invalid dates
+            }
+          }
+          
+          // Sort by date
+          dataWithDates.sort((a, b) => a.date - b.date);
+          
+          if (dataWithDates.length > 0) {
+            startDate = dataWithDates[0].dateStr;
+            endDate = dataWithDates[dataWithDates.length - 1].dateStr;
             
             // Calculate days covered
             if (startDate && endDate) {
               const start = new Date(startDate);
               const end = new Date(endDate);
               daysCovered = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+            }
+            
+            // Create structured data from CSV for consistent return format
+            parsedData = [];
+            for (const item of dataWithDates) {
+              const fields = item.line.split(',');
+              const dataObj = { Date: item.dateStr };
+              
+              // Add all available fields
+              for (let j = 0; j < headers.length; j++) {
+                if (j !== dateIndex && j < fields.length) {
+                  let fieldName = headers[j].trim();
+                  let value = fields[j].trim();
+                  
+                  // Handle special column name cases for better compatibility
+                  if (fieldName === 'Close/Last') {
+                    fieldName = 'Close';
+                  }
+                  
+                  // Remove $ or other currency symbols if present
+                  if (typeof value === 'string') {
+                    value = value.replace(/[$,]/g, '');
+                  }
+                  
+                  // Try to convert to number if possible
+                  const numValue = parseFloat(value);
+                  
+                  // Store both Close and Adj Close for compatibility
+                  if (fieldName === 'Close') {
+                    dataObj[fieldName] = isNaN(numValue) ? 0 : numValue;
+                    if (!dataObj['Adj Close']) {
+                      dataObj['Adj Close'] = isNaN(numValue) ? 0 : numValue;
+                    }
+                  } else {
+                    dataObj[fieldName] = isNaN(numValue) ? value : numValue;
+                  }
+                }
+              }
+              
+              parsedData.push(dataObj);
             }
           }
         } else {
@@ -932,61 +1024,124 @@ async function readHistoricalDataFromJson(symbol) {
   }
 }
 
+// Note: The old processDataFile function has been replaced by the 
+// StockDataProvider functionality in data_provider.js
+
 /**
- * Process data file for data availability endpoint
- * @param {string} symbol - Stock symbol
- * @param {string} dataPath - Path to data file
- * @param {string} metricsPath - Path to metrics file
- * @param {string} fileType - File type ('json' or 'csv')
- * @param {Object} res - HTTP response object
+ * Convert CSV content to structured data array
+ * @param {string} csvContent - CSV file content
+ * @returns {Array} - Array of objects with date and price data
  */
-function processDataFile(symbol, dataPath, metricsPath, fileType, res) {
-  // Read the data file
-  fs.readFile(dataPath, 'utf8', (dataErr, dataContent) => {
-    if (dataErr) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        error: `Error reading data file: ${dataErr.message}`
-      }));
-      return;
+function convertCsvToStructuredData(csvContent) {
+  // Parse CSV lines
+  const lines = csvContent.trim().split('\n');
+  
+  if (lines.length <= 1) {
+    return [];
+  }
+  
+  // Parse headers and find necessary columns
+  const headers = lines[0].split(',').map(h => h.trim());
+  const dateIndex = headers.indexOf('Date');
+  
+  // Look for Close column, accounting for variant names
+  let closeIndex = headers.indexOf('Close');
+  if (closeIndex === -1) {
+    closeIndex = headers.indexOf('Close/Last');
+  }
+  
+  const adjCloseIndex = headers.indexOf('Adj Close');
+  const volumeIndex = headers.indexOf('Volume');
+  const openIndex = headers.indexOf('Open');
+  const highIndex = headers.indexOf('High');
+  const lowIndex = headers.indexOf('Low');
+  
+  if (dateIndex === -1) {
+    console.error('CSV is missing Date column');
+    return [];
+  }
+  
+  // Use Close if Adj Close isn't available
+  const priceIndex = adjCloseIndex !== -1 ? adjCloseIndex : closeIndex;
+  
+  if (priceIndex === -1) {
+    console.error('CSV is missing both Close and Adj Close columns');
+    return [];
+  }
+  
+  // Convert each line to a structured object
+  const structuredData = [];
+  
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    
+    const fields = line.split(',');
+    if (fields.length <= Math.max(dateIndex, priceIndex)) continue;
+    
+    // Extract values
+    const dateStr = fields[dateIndex];
+    
+    // Clean values by removing $ and commas
+    const cleanValue = (idx) => {
+      if (idx === -1 || idx >= fields.length) return '';
+      let val = fields[idx].trim();
+      return val.replace(/[$,]/g, '');
+    };
+    
+    const closeStr = cleanValue(closeIndex !== -1 ? closeIndex : priceIndex);
+    const adjCloseStr = cleanValue(adjCloseIndex !== -1 ? adjCloseIndex : priceIndex);
+    
+    const close = parseFloat(closeStr);
+    const adjClose = parseFloat(adjCloseStr);
+    
+    if (!dateStr || (isNaN(close) && isNaN(adjClose))) continue;
+    
+    // Create data object
+    const dataObject = {
+      Date: dateStr,
+      Close: isNaN(close) ? null : close
+    };
+    
+    // Add Adj Close if available
+    if (adjCloseIndex !== -1 && !isNaN(adjClose)) {
+      dataObject['Adj Close'] = adjClose;
     }
     
-    try {
-      // Parse the stock data
-      const parsedInfo = parseStockData(dataContent, fileType);
-      console.log(`Parsed ${symbol}: ${parsedInfo.dataPoints} points, ${parsedInfo.daysCovered} days covered`);
-      
-      // Try to read metrics file
-      fs.readFile(metricsPath, 'utf8', (metricsErr, metricsContent) => {
-        let metrics = null;
-        
-        if (!metricsErr) {
-          try {
-            metrics = JSON.parse(metricsContent);
-          } catch (parseErr) {
-            console.error(`Error parsing metrics for ${symbol}:`, parseErr);
-          }
-        }
-        
-        // Return the data availability summary
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          symbol,
-          dataPoints: parsedInfo.dataPoints,
-          startDate: parsedInfo.startDate,
-          endDate: parsedInfo.endDate,
-          daysCovered: parsedInfo.daysCovered,
-          metrics,
-          data: fileType === 'json' ? parsedInfo.data : null // Only include data for JSON files
-        }));
-      });
-    } catch (parseErr) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        error: `Error parsing data file: ${parseErr.message}`
-      }));
+    // Add Volume if available
+    if (volumeIndex !== -1 && fields.length > volumeIndex) {
+      const volume = parseInt(fields[volumeIndex]);
+      if (!isNaN(volume)) {
+        dataObject.Volume = volume;
+      }
     }
-  });
+    
+    // Add Open, High, Low if available
+    if (openIndex !== -1 && fields.length > openIndex) {
+      const open = parseFloat(fields[openIndex]);
+      if (!isNaN(open)) {
+        dataObject.Open = open;
+      }
+    }
+    
+    if (highIndex !== -1 && fields.length > highIndex) {
+      const high = parseFloat(fields[highIndex]);
+      if (!isNaN(high)) {
+        dataObject.High = high;
+      }
+    }
+    
+    if (lowIndex !== -1 && fields.length > lowIndex) {
+      const low = parseFloat(fields[lowIndex]);
+      if (!isNaN(low)) {
+        dataObject.Low = low;
+      }
+    }
+    
+    structuredData.push(dataObject);
+  }
+  
+  return structuredData;
 }
 
 /**
@@ -1301,4 +1456,11 @@ function calculateAnnualizedReturn(returns) {
 server.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}/`);
   console.log(`Open your browser to see the Kelly Criterion visualization`);
+  console.log(`Using modern data provider architecture for improved data handling`);
 });
+
+// Note: The following functions have been replaced by the StockDataProvider classes in data_provider.js:
+// - parseStockData()
+// - readHistoricalDataFromJson()
+// - processDataFile()
+// - convertCsvToStructuredData()
