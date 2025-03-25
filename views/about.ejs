@@ -1,0 +1,88 @@
+<%- contentFor('body') %>
+<div class="container">
+    <div class="row">
+        <div class="col-md-8 offset-md-2">
+            <h2>About the Kelly Criterion</h2>
+            <p class="lead">Understanding the mathematical foundation of optimal portfolio allocation</p>
+
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h3>What is the Kelly Criterion?</h3>
+                    <p>The Kelly Criterion is a mathematical formula that determines the optimal size of a series of bets to maximize long-term growth. In portfolio management, it helps determine the optimal allocation of capital across different investments.</p>
+                    
+                    <h4>The Formula</h4>
+                    <p>The basic Kelly formula for a single investment is:</p>
+                    <div class="formula">
+                        f* = (μ - r) / σ²
+                    </div>
+                    <p>Where:</p>
+                    <ul>
+                        <li>f* is the Kelly fraction (optimal allocation)</li>
+                        <li>μ is the expected return</li>
+                        <li>r is the risk-free rate</li>
+                        <li>σ² is the variance (volatility squared)</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h3>Risk Management</h3>
+                    <p>While the Kelly Criterion provides the mathematically optimal allocation for maximum growth, it can be too aggressive for most investors. Common risk management approaches include:</p>
+                    <ul>
+                        <li><strong>Half Kelly:</strong> Using 50% of the Kelly fraction</li>
+                        <li><strong>Quarter Kelly:</strong> Using 25% of the Kelly fraction</li>
+                        <li><strong>Eighth Kelly:</strong> Using 12.5% of the Kelly fraction</li>
+                    </ul>
+                    <p>These fractional Kelly strategies reduce the expected growth rate but significantly reduce the risk of ruin.</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-body">
+                    <h3>Important Considerations</h3>
+                    <ul>
+                        <li>The Kelly Criterion assumes you know the true probabilities and returns</li>
+                        <li>It's sensitive to estimation errors in expected returns</li>
+                        <li>Transaction costs and taxes are not considered</li>
+                        <li>It assumes you can reinvest all profits</li>
+                    </ul>
+                    <p>Therefore, the Kelly Criterion should be used as one of many tools in portfolio management, not as the sole decision maker.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<%- contentFor('style') %>
+<style>
+    .formula {
+        font-size: 1.25rem;
+        font-family: "Times New Roman", serif;
+        text-align: center;
+        margin: 1rem 0;
+        padding: 1rem;
+        background: #f8f9fa;
+        border-radius: 0.5rem;
+    }
+    .card {
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .card-body {
+        padding: 1.5rem;
+    }
+    .card h3 {
+        color: #0d6efd;
+        margin-bottom: 1rem;
+    }
+    .card h4 {
+        color: #495057;
+        margin: 1.5rem 0 1rem;
+    }
+    .card ul {
+        padding-left: 1.5rem;
+    }
+    .card li {
+        margin-bottom: 0.5rem;
+    }
+</style> 

@@ -42,126 +42,108 @@ const confirmDeleteButton = document.getElementById('confirmDeleteButton');
 
 // Initialize the page
 document.addEventListener('DOMContentLoaded', () => {
-  // Get stock symbol from URL query parameter
-  const urlParams = new URLSearchParams(window.location.search);
-  stockSymbol = urlParams.get('symbol');
+  // Get the stock symbol from the URL
+  const pathParts = window.location.pathname.split('/');
+  const symbol = pathParts[pathParts.length - 1];
   
-  if (!stockSymbol) {
-    showMessage('No stock symbol provided. Please go back and select a stock.', 'danger');
-    return;
-  }
+  // Update the stock symbol in the page title
+  document.getElementById('stockSymbol').textContent = symbol;
   
-  // Update page title and description
-  stockSymbolElement.textContent = stockSymbol;
-  stockDescriptionElement.textContent = `Detailed information and management for ${stockSymbol}`;
-  document.title = `${stockSymbol} Detail | Kelly Criterion`;
-  
-  // Set up event listeners
-  calculateButton.addEventListener('click', calculateParameters);
-  saveButton.addEventListener('click', saveParameters);
-  useHistoricalCheckbox.addEventListener('change', toggleHistoricalCalculation);
-  
-  // Load initial data
-  loadStockData();
+  // Load stock data
+  loadStockData(symbol);
 });
 
 /**
  * Loads stock data from the server
  */
-async function loadStockData() {
-  const stockInfoElement = document.getElementById('stock-info');
-  
+async function loadStockData(symbol) {
   try {
-    const symbol = new URLSearchParams(window.location.search).get('symbol');
-    if (!symbol) {
-      if (stockInfoElement) {
-        stockInfoElement.innerHTML = `
-          <div class="error-message">
-            No symbol found in URL
-          </div>
-        `;
-      }
-      return;
-    }
-
-    const response = await fetch(`/data-availability?symbol=${symbol}`);
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Failed to load stock data: ${response.status} ${errorText}`);
-    }
-
-    const data = await response.json();
+    // Load stock settings
+    const settingsResponse = await fetch('/api/stocks');
+    const settings = await settingsResponse.json();
+    const stockData = settings.stocks[symbol];
     
-    // Simple validation without recursive logging
-    if (!data || !data.data || !Array.isArray(data.data)) {
-      throw new Error('Invalid data structure received from server');
+    if (!stockData) {
+      throw new Error('Stock not found');
     }
-
-    // Calculate default metrics if not provided
-    if (!data.metrics) {
-      data.metrics = calculateDefaultMetrics(data.data);
-    }
-
-    // Update UI with processed data
-    stockData = data.data;
-    updateStockInfo(data);
-    updateParameterInputs(data);
-    createPriceChart(data.data);
-    createVolumeChart(data.data);
-    createReturnsChart(data.data);
-    createKellyChart(data.data, data.metrics);
     
+    // Update basic information
+    document.getElementById('symbol').textContent = symbol;
+    document.getElementById('companyName').textContent = stockData.companyName || 'N/A';
+    document.getElementById('expectedReturn').textContent = `${stockData.expectedReturn}%`;
+    document.getElementById('volatility').textContent = `${stockData.volatility}%`;
+    document.getElementById('shares').textContent = stockData.shares || 'N/A';
+    
+    // Calculate and display Kelly fractions
+    const riskFreeRate = settings.riskFreeRate || 4.0; // Default to 4% if not specified
+    const expectedReturn = stockData.expectedReturn / 100; // Convert to decimal
+    const volatility = stockData.volatility / 100; // Convert to decimal
+    
+    const fullKelly = calculateKellyFraction(expectedReturn, volatility, riskFreeRate);
+    const halfKelly = fullKelly * 0.5;
+    const quarterKelly = fullKelly * 0.25;
+    
+    document.getElementById('fullKelly').textContent = `${(fullKelly * 100).toFixed(2)}%`;
+    document.getElementById('halfKelly').textContent = `${(halfKelly * 100).toFixed(2)}%`;
+    document.getElementById('quarterKelly').textContent = `${(quarterKelly * 100).toFixed(2)}%`;
+    
+    // Load historical data
+    const dataResponse = await fetch(`/data-availability?symbol=${symbol}`);
+    const historicalData = await dataResponse.json();
+    
+    if (historicalData.data) {
+      displayHistoricalData(historicalData.data);
+    }
   } catch (error) {
-    console.error('Error in loadStockData:', error);
-    if (stockInfoElement) {
-      stockInfoElement.innerHTML = `
-        <div class="error-message">
-          Failed to load stock data: ${error.message}
-        </div>
-      `;
-    }
+    console.error('Error loading stock data:', error);
+    alert('Failed to load stock data. Please try again later.');
   }
 }
 
-/**
- * Calculates default metrics from historical data
- * @param {Array} data - Array of historical price data
- * @returns {Object} - Calculated metrics
- */
-function calculateDefaultMetrics(data) {
-  if (!Array.isArray(data) || data.length < 2) {
-    return {
-      expectedReturn: 0.15, // Default 15% expected return
-      volatility: 0.40,     // Default 40% volatility
-      lastCalculatedDate: new Date().toISOString()
-    };
-  }
+function calculateKellyFraction(expectedReturn, volatility, riskFreeRate) {
+  // Convert risk-free rate to decimal
+  const r = riskFreeRate / 100;
+  
+  // Kelly formula: f* = (μ - r) / σ²
+  const kellyFraction = (expectedReturn - r) / (volatility * volatility);
+  
+  // Ensure the fraction is between 0 and 1
+  return Math.max(0, Math.min(1, kellyFraction));
+}
 
-  // Calculate daily returns
-  const returns = [];
-  for (let i = 1; i < data.length; i++) {
-    const currPrice = data[i]['Adj Close'] || data[i].Close;
-    const prevPrice = data[i-1]['Adj Close'] || data[i-1].Close;
-    if (currPrice && prevPrice) {
-      const dailyReturn = ((currPrice - prevPrice) / prevPrice);
-      returns.push(dailyReturn);
-    }
-  }
+function displayHistoricalData(data) {
+  const tbody = document.getElementById('historicalData');
+  tbody.innerHTML = ''; // Clear existing data
+  
+  // Sort data by date in descending order (most recent first)
+  const sortedData = data.sort((a, b) => new Date(b.Date) - new Date(a.Date));
+  
+  // Display the most recent 100 data points
+  sortedData.slice(0, 100).forEach(record => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${formatDate(record.Date)}</td>
+      <td>${formatNumber(record.Open)}</td>
+      <td>${formatNumber(record.High)}</td>
+      <td>${formatNumber(record.Low)}</td>
+      <td>${formatNumber(record.Close)}</td>
+      <td>${formatNumber(record.Volume)}</td>
+    `;
+    tbody.appendChild(row);
+  });
+}
 
-  // Calculate average daily return and annualize it
-  const avgDailyReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
-  const expectedReturn = Math.pow(1 + avgDailyReturn, 252) - 1; // Annualize assuming 252 trading days
+function formatDate(dateString) {
+  const date = new Date(dateString);
+  return date.toLocaleDateString();
+}
 
-  // Calculate volatility (standard deviation of returns)
-  const squaredDiffs = returns.map(r => Math.pow(r - avgDailyReturn, 2));
-  const variance = squaredDiffs.reduce((a, b) => a + b, 0) / returns.length;
-  const volatility = Math.sqrt(variance * 252); // Annualize volatility
-
-  return {
-    expectedReturn: Math.max(0.05, Math.min(0.50, expectedReturn)), // Cap between 5% and 50%
-    volatility: Math.max(0.20, Math.min(1.00, volatility)),         // Cap between 20% and 100%
-    lastCalculatedDate: new Date().toISOString()
-  };
+function formatNumber(number) {
+  if (typeof number !== 'number') return 'N/A';
+  return number.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
 }
 
 /**

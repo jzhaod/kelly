@@ -1,0 +1,98 @@
+<%- contentFor('body') %>
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col">
+            <h2>Stock Settings</h2>
+            <p class="lead">Configure your investment universe and manage stock parameters</p>
+        </div>
+        <div class="col-auto">
+            <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addStockModal">
+                <i class="bi bi-plus-circle"></i> Add Stock
+            </button>
+        </div>
+    </div>
+
+    <!-- Stock List -->
+    <div class="row">
+        <div class="col">
+            <div class="card">
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Company Name</th>
+                                    <th>Expected Return (%)</th>
+                                    <th>Volatility (%)</th>
+                                    <th>Shares</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="stockList">
+                                <!-- Stock list will be dynamically populated -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Stock Modal -->
+<div class="modal fade" id="addStockModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add New Stock</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="addStockForm">
+                    <div class="mb-3">
+                        <label for="symbol" class="form-label">Stock Symbol</label>
+                        <input type="text" class="form-control" id="symbol" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="companyName" class="form-label">Company Name</label>
+                        <input type="text" class="form-control" id="companyName" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="expectedReturn" class="form-label">Expected Return (%)</label>
+                        <input type="number" class="form-control" id="expectedReturn" step="0.01" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="volatility" class="form-label">Volatility (%)</label>
+                        <input type="number" class="form-control" id="volatility" step="0.01" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="shares" class="form-label">Number of Shares</label>
+                        <input type="number" class="form-control" id="shares" step="1" required>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="saveStock">Add Stock</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<%- contentFor('style') %>
+<style>
+    .table th {
+        background-color: #f8f9fa;
+    }
+    .table td {
+        vertical-align: middle;
+    }
+    .btn-group-sm > .btn, .btn-sm {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.875rem;
+    }
+</style>
+
+<%- contentFor('script') %>
+<script src="/js/stock_settings.js"></script> 

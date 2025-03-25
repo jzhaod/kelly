@@ -3,9 +3,11 @@
  */
 
 const express = require('express');
-const app = express();
-const fs = require('fs').promises;
 const path = require('path');
+const expressLayouts = require('express-ejs-layouts');
+const app = express();
+const port = 3000;
+const fs = require('fs').promises;
 const { createDataProcessor } = require('./data_processor');
 
 const PORT = 3000;
@@ -25,6 +27,93 @@ const {
   updateSettingsWithVolatilityMetrics
 } = require('./historical_data');
 
+// Set up EJS and layout middleware
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
+app.use(expressLayouts);
+app.set('layout', 'layout');
+app.set("layout extractScripts", true);
+app.set("layout extractStyles", true);
+
+// Serve static files
+app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json());
+
+// Routes for EJS templates
+app.get('/', (req, res) => {
+    res.render('index', { 
+        title: 'Kelly Criterion Portfolio',
+        page: 'index'
+    });
+});
+
+app.get('/stock-settings', (req, res) => {
+    res.render('stock_settings', { 
+        title: 'Stock Settings - Kelly Criterion',
+        page: 'stock_settings'
+    });
+});
+
+app.get('/about', (req, res) => {
+    res.render('about', { 
+        title: 'About - Kelly Criterion',
+        page: 'about'
+    });
+});
+
+app.get('/stock/:symbol', (req, res) => {
+    res.render('stock_detail', { 
+        title: `${req.params.symbol} - Stock Details`,
+        page: 'stock_detail',
+        symbol: req.params.symbol
+    });
+});
+
+// Routes for old HTML files
+app.get('/historical_data_management.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'historical_data_management.html'));
+});
+
+app.get('/settings.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'settings.html'));
+});
+
+app.get('/stock_detail.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'stock_detail.html'));
+});
+
+// API routes for stock settings
+app.get('/api/stocks', (req, res) => {
+    const settings = require('./stock_settings.json');
+    const stocks = Object.entries(settings.stocks).map(([symbol, data]) => ({
+        symbol,
+        ...data
+    }));
+    res.json(stocks);
+});
+
+app.post('/api/stocks', (req, res) => {
+    const fs = require('fs');
+    const settings = require('./stock_settings.json');
+    const { symbol, expectedReturn, volatility } = req.body;
+    
+    settings.stocks[symbol] = {
+        expectedReturn,
+        volatility
+    };
+    
+    fs.writeFileSync('./stock_settings.json', JSON.stringify(settings, null, 2));
+    res.json({ success: true });
+});
+
+app.delete('/api/stocks/:symbol', (req, res) => {
+    const fs = require('fs');
+    const settings = require('./stock_settings.json');
+    delete settings.stocks[req.params.symbol];
+    fs.writeFileSync('./stock_settings.json', JSON.stringify(settings, null, 2));
+    res.json({ success: true });
+});
+
 const MIME_TYPES = {
   '.html': 'text/html',
   '.js': 'text/javascript',
@@ -37,87 +126,84 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon'
 };
 
-// Create HTTP server
-const server = express();
-
 // Handle data availability request
-server.get('/data-availability', async (req, res) => {
-  try {
-    const symbol = req.query.symbol;
-    if (!symbol) {
-      console.error('No symbol provided in request');
-      return res.status(400).json({ error: 'Symbol parameter is required' });
-    }
-
-    console.log(`Processing data availability request for symbol: ${symbol}`);
-    let data = null;
-    let metrics = null;
-    let processor = null;
-
+app.get('/data-availability', async (req, res) => {
     try {
-      // Try to read JSON data first
-      const jsonPath = path.join(__dirname, 'data', `${symbol}.json`);
-      console.log(`Attempting to read JSON data from: ${jsonPath}`);
-      const jsonData = await fs.readFile(jsonPath, 'utf8');
-      data = JSON.parse(jsonData);
-      processor = createDataProcessor('json');
-      processor.symbol = symbol;
-      console.log('Successfully loaded JSON data');
-    } catch (jsonError) {
-      console.log('JSON data not found, falling back to CSV:', jsonError.message);
-      try {
-        // Fall back to CSV data
-        const csvPath = path.join(__dirname, 'data', `${symbol}.csv`);
-        console.log(`Attempting to read CSV data from: ${csvPath}`);
-        const csvContent = await fs.readFile(csvPath, 'utf8');
-        processor = createDataProcessor('csv');
-        processor.symbol = symbol;
-        data = csvContent;
-        console.log('Successfully loaded CSV data');
-      } catch (csvError) {
-        console.error('Failed to read CSV data:', csvError.message);
-        return res.status(404).json({ error: 'Stock data not found' });
-      }
-    }
+        const symbol = req.query.symbol;
+        if (!symbol) {
+            console.error('No symbol provided in request');
+            return res.status(400).json({ error: 'Symbol parameter is required' });
+        }
 
-    try {
-      // Try to read metrics data if available
-      const metricsPath = path.join(__dirname, 'data', `${symbol}_metrics.json`);
-      console.log(`Attempting to read metrics data from: ${metricsPath}`);
-      const metricsData = await fs.readFile(metricsPath, 'utf8');
-      metrics = JSON.parse(metricsData);
-      console.log('Successfully loaded metrics data');
-    } catch (metricsError) {
-      console.log('Metrics data not found:', metricsError.message);
-    }
+        console.log(`Processing data availability request for symbol: ${symbol}`);
+        let data = null;
+        let metrics = null;
+        let processor = null;
 
-    try {
-      console.log('Processing data with processor');
-      const processedData = await processor.processData(data);
-      if (metrics) {
-        processedData.metrics = metrics;
-      }
-      console.log('Successfully processed data:', {
-        dataPoints: processedData.dataPoints,
-        startDate: processedData.startDate,
-        endDate: processedData.endDate,
-        daysCovered: processedData.daysCovered
-      });
-      res.json(processedData);
-    } catch (processError) {
-      console.error('Error processing data:', processError);
-      console.error('Error stack:', processError.stack);
-      res.status(500).json({ error: 'Failed to process stock data' });
+        try {
+            // Try to read JSON data first
+            const jsonPath = path.join(__dirname, 'data', `${symbol}.json`);
+            console.log(`Attempting to read JSON data from: ${jsonPath}`);
+            const jsonData = await fs.readFile(jsonPath, 'utf8');
+            data = JSON.parse(jsonData);
+            processor = createDataProcessor('json');
+            processor.symbol = symbol;
+            console.log('Successfully loaded JSON data');
+        } catch (jsonError) {
+            console.log('JSON data not found, falling back to CSV:', jsonError.message);
+            try {
+                // Fall back to CSV data
+                const csvPath = path.join(__dirname, 'data', `${symbol}.csv`);
+                console.log(`Attempting to read CSV data from: ${csvPath}`);
+                const csvContent = await fs.readFile(csvPath, 'utf8');
+                processor = createDataProcessor('csv');
+                processor.symbol = symbol;
+                data = csvContent;
+                console.log('Successfully loaded CSV data');
+            } catch (csvError) {
+                console.error('Failed to read CSV data:', csvError.message);
+                return res.status(404).json({ error: 'Stock data not found' });
+            }
+        }
+
+        try {
+            // Try to read metrics data if available
+            const metricsPath = path.join(__dirname, 'data', `${symbol}_metrics.json`);
+            console.log(`Attempting to read metrics data from: ${metricsPath}`);
+            const metricsData = await fs.readFile(metricsPath, 'utf8');
+            metrics = JSON.parse(metricsData);
+            console.log('Successfully loaded metrics data');
+        } catch (metricsError) {
+            console.log('Metrics data not found:', metricsError.message);
+        }
+
+        try {
+            console.log('Processing data with processor');
+            const processedData = await processor.processData(data);
+            if (metrics) {
+                processedData.metrics = metrics;
+            }
+            console.log('Successfully processed data:', {
+                dataPoints: processedData.dataPoints,
+                startDate: processedData.startDate,
+                endDate: processedData.endDate,
+                daysCovered: processedData.daysCovered
+            });
+            res.json(processedData);
+        } catch (processError) {
+            console.error('Error processing data:', processError);
+            console.error('Error stack:', processError.stack);
+            res.status(500).json({ error: 'Failed to process stock data' });
+        }
+    } catch (error) {
+        console.error('Unexpected error in data-availability endpoint:', error);
+        console.error('Error stack:', error.stack);
+        res.status(500).json({ error: 'Internal server error' });
     }
-  } catch (error) {
-    console.error('Unexpected error in data-availability endpoint:', error);
-    console.error('Error stack:', error.stack);
-    res.status(500).json({ error: 'Internal server error' });
-  }
 });
 
 // Handle save settings endpoint
-server.post('/save-settings', (req, res) => {
+app.post('/save-settings', (req, res) => {
   let body = '';
   
   req.on('data', chunk => {
@@ -149,7 +235,7 @@ server.post('/save-settings', (req, res) => {
 });
 
 // Handle load settings endpoint
-server.get('/load-settings', (req, res) => {
+app.get('/load-settings', (req, res) => {
   fs.readFile(SETTINGS_FILE, (err, data) => {
     if (err) {
       if (err.code === 'ENOENT') {
@@ -177,7 +263,7 @@ server.get('/load-settings', (req, res) => {
 });
 
 // Handle data status endpoint
-server.get('/data-status', async (req, res) => {
+app.get('/data-status', async (req, res) => {
   // Read directly from the data directory instead of using the status file
   const dataDir = path.join(__dirname, 'data');
   
@@ -315,7 +401,7 @@ server.get('/data-status', async (req, res) => {
 });
 
 // Handle fetch historical data endpoint
-server.post('/fetch-historical-data', async (req, res) => {
+app.post('/fetch-historical-data', async (req, res) => {
   let body = '';
   
   req.on('data', chunk => {
@@ -349,7 +435,7 @@ server.post('/fetch-historical-data', async (req, res) => {
 });
 
 // Handle delete historical data endpoint
-server.post('/delete-historical-data', async (req, res) => {
+app.post('/delete-historical-data', async (req, res) => {
   let body = '';
   
   req.on('data', chunk => {
@@ -383,7 +469,7 @@ server.post('/delete-historical-data', async (req, res) => {
 });
 
 // Handle fill data gaps endpoint
-server.post('/fill-data-gaps', async (req, res) => {
+app.post('/fill-data-gaps', async (req, res) => {
   let body = '';
   
   req.on('data', chunk => {
@@ -454,7 +540,7 @@ server.post('/fill-data-gaps', async (req, res) => {
 });
 
 // Handle calculate volatility endpoint
-server.post('/calculate-volatility', async (req, res) => {
+app.post('/calculate-volatility', async (req, res) => {
   try {
     const result = await calculateAllVolatilityMetricsCustom();
     res.status(200).json(result);
@@ -469,7 +555,7 @@ server.post('/calculate-volatility', async (req, res) => {
 });
 
 // Handle volatility metrics endpoint
-server.get('/volatility-metrics', async (req, res) => {
+app.get('/volatility-metrics', async (req, res) => {
   try {
     const metrics = await getVolatilityMetrics();
     res.status(200).json(metrics);
@@ -480,7 +566,7 @@ server.get('/volatility-metrics', async (req, res) => {
 });
 
 // Handle list-stocks endpoint
-server.get('/list-stocks', (req, res) => {
+app.get('/list-stocks', (req, res) => {
   const dataDir = path.join(__dirname, 'data');
   
   // Read all files in the data directory
@@ -511,7 +597,7 @@ server.get('/list-stocks', (req, res) => {
 });
 
 // Handle static files
-server.use(express.static(__dirname, {
+app.use(express.static(__dirname, {
   setHeaders: (res, path) => {
     // Set proper MIME types
     const ext = path.split('.').pop().toLowerCase();
@@ -1101,8 +1187,16 @@ function calculateAnnualizedReturn(returns) {
   return Math.pow(1 + avgDailyReturn, 252) - 1;
 }
 
+// Error handling
+app.use((req, res) => {
+    res.status(404).render('404', { 
+        title: '404 - Page Not Found',
+        page: '404'
+    });
+});
+
 // Start server
-server.listen(PORT, () => {
+app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}/`);
   console.log(`Open your browser to see the Kelly Criterion visualization`);
   console.log(`Using modern data provider architecture for improved data handling`);

@@ -1,0 +1,157 @@
+<%- contentFor('body') %>
+<div class="welcome-section text-center mb-5">
+    <h1>Kelly Criterion Portfolio</h1>
+    <p class="lead">Optimize your investment portfolio using the Kelly Criterion formula</p>
+</div>
+
+<div class="container">
+    <div class="row">
+        <div class="col-md-8 mb-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h5 class="card-title">Portfolio Optimization</h5>
+                    <p class="card-text">Calculate optimal position sizes using the Kelly Criterion for your portfolio.</p>
+                    
+                    <!-- Simulation Controls -->
+                    <div class="simulation-controls mb-4">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label for="simulationYears" class="form-label">Simulation Period (Years)</label>
+                                <input type="number" class="form-control" id="simulationYears" value="10" min="1" max="30">
+                            </div>
+                            <div class="col-md-6">
+                                <label for="initialCapital" class="form-label">Initial Capital ($)</label>
+                                <input type="number" class="form-control" id="initialCapital" value="100000" min="1000">
+                            </div>
+                            <div class="col-12">
+                                <button type="button" class="btn btn-primary" id="runSimulation">Run Simulation</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Kelly Table -->
+                    <div class="table-responsive mb-4">
+                        <table class="table table-hover" id="kelly-table">
+                            <thead>
+                                <tr>
+                                    <th>Stock</th>
+                                    <th>Expected Return (%)</th>
+                                    <th>Volatility (%)</th>
+                                    <th>Full Kelly (%)</th>
+                                    <th>75% Kelly (%)</th>
+                                    <th>Half Kelly (%)</th>
+                                    <th>Quarter Kelly (%)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="kelly-table-body">
+                                <!-- Kelly table will be dynamically populated -->
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Simulation Results -->
+                    <div id="simulation-results" style="display: none;">
+                        <h6 class="mb-3">Simulation Results</h6>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="card bg-light">
+                                    <div class="card-body">
+                                        <h6 class="card-title">Portfolio Value Over Time</h6>
+                                        <canvas id="portfolioValueChart"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card bg-light">
+                                    <div class="card-body">
+                                        <h6 class="card-title">Performance Metrics</h6>
+                                        <div class="table-responsive">
+                                            <table class="table table-sm">
+                                                <tbody>
+                                                    <tr>
+                                                        <th>Final Value</th>
+                                                        <td id="finalValue"></td>
+                                                    </tr>
+                                                    <tr>
+                                                        <th>Total Return</th>
+                                                        <td id="totalReturn"></td>
+                                                    </tr>
+                                                    <tr>
+                                                        <th>Annual Return</th>
+                                                        <td id="annualReturn"></td>
+                                                    </tr>
+                                                    <tr>
+                                                        <th>Max Drawdown</th>
+                                                        <td id="maxDrawdown"></td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 mb-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h5 class="card-title">Stock Settings</h5>
+                    <p class="card-text">Configure your stock portfolio settings and parameters.</p>
+                    <a href="/stock-settings" class="btn btn-primary">Configure Stocks</a>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-md-6 mb-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h5 class="card-title">Performance Analysis</h5>
+                    <p class="card-text">Analyze the performance of your portfolio over time.</p>
+                    <a href="/performance" class="btn btn-primary">View Analysis</a>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6 mb-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <h5 class="card-title">About</h5>
+                    <p class="card-text">Learn more about the Kelly Criterion and how it works.</p>
+                    <a href="/about" class="btn btn-primary">Learn More</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<%- contentFor('style') %>
+<style>
+    .welcome-section {
+        padding: 3rem 0;
+        background: linear-gradient(to right, #f8f9fa, #e9ecef);
+        border-radius: 0.5rem;
+        margin-bottom: 2rem;
+    }
+    .card {
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .table th {
+        background-color: #f8f9fa;
+    }
+    .simulation-controls {
+        background-color: #f8f9fa;
+        padding: 1rem;
+        border-radius: 0.5rem;
+    }
+    #portfolioValueChart {
+        width: 100%;
+        height: 300px;
+    }
+</style>
+
+<%- contentFor('scripts') %>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="/js/index.js"></script> 

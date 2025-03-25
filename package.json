@@ -21,7 +21,9 @@
   "dependencies": {
     "csv-parse": "^5.6.0",
     "csv-parser": "^3.2.0",
+    "ejs": "^3.1.10",
     "express": "^4.21.2",
+    "express-ejs-layouts": "^2.5.1",
     "node-fetch": "^2.6.7"
   },
   "engines": {
