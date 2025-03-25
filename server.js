@@ -2,9 +2,11 @@
  * Simple HTTP server for Kelly Criterion visualization
  */
 
-const http = require('http');
-const fs = require('fs');
+const express = require('express');
+const app = express();
+const fs = require('fs').promises;
 const path = require('path');
+const { createDataProcessor } = require('./data_processor');
 
 const PORT = 3000;
 const SETTINGS_FILE = path.join(__dirname, 'stock_settings.json');
@@ -36,700 +38,493 @@ const MIME_TYPES = {
 };
 
 // Create HTTP server
-const server = http.createServer((req, res) => {
-  console.log(`Request: ${req.method} ${req.url}`);
-  
-  // Handle save settings endpoint
-  if (req.method === 'POST' && req.url === '/save-settings') {
-    let body = '';
-    
-    req.on('data', chunk => {
-      body += chunk.toString();
-    });
-    
-    req.on('end', () => {
-      try {
-        // Parse the JSON data
-        const settingsData = JSON.parse(body);
-        
-        // Save to file
-        fs.writeFile(SETTINGS_FILE, JSON.stringify(settingsData, null, 2), err => {
-          if (err) {
-            console.error('Error saving settings:', err);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Failed to save settings' }));
-            return;
-          }
-          
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: true, message: 'Settings saved successfully' }));
-        });
-      } catch (error) {
-        console.error('Error parsing settings data:', error);
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid settings data' }));
-      }
-    });
-    
-    return;
-  }
-  
-  // Handle load settings endpoint
-  if (req.method === 'GET' && req.url === '/load-settings') {
-    fs.readFile(SETTINGS_FILE, (err, data) => {
-      if (err) {
-        if (err.code === 'ENOENT') {
-          // Settings file doesn't exist yet
-          res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'No saved settings found' }));
-        } else {
-          console.error('Error reading settings:', err);
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Failed to load settings' }));
-        }
-        return;
-      }
-      
-      try {
-        // Parse the JSON data
-        const settingsData = JSON.parse(data);
-        
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(settingsData));
-      } catch (error) {
-        console.error('Error parsing settings file:', error);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid settings file format' }));
-      }
-    });
-    
-    return;
-  }
-  
-  // Handle data status endpoint
-  if (req.method === 'GET' && req.url === '/data-status') {
-    // Read directly from the data directory instead of using the status file
-    const dataDir = path.join(__dirname, 'data');
-    
-    // Ensure the data directory exists
+const server = express();
+
+// Handle data availability request
+server.get('/data-availability', async (req, res) => {
+  try {
+    const symbol = req.query.symbol;
+    if (!symbol) {
+      console.error('No symbol provided in request');
+      return res.status(400).json({ error: 'Symbol parameter is required' });
+    }
+
+    console.log(`Processing data availability request for symbol: ${symbol}`);
+    let data = null;
+    let metrics = null;
+    let processor = null;
+
     try {
-      fs.mkdirSync(dataDir, { recursive: true });
-    } catch (err) {
-      if (err.code !== 'EEXIST') {
-        console.error('Error creating data directory:', err);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Failed to ensure data directory exists' }));
-        return;
+      // Try to read JSON data first
+      const jsonPath = path.join(__dirname, 'data', `${symbol}.json`);
+      console.log(`Attempting to read JSON data from: ${jsonPath}`);
+      const jsonData = await fs.readFile(jsonPath, 'utf8');
+      data = JSON.parse(jsonData);
+      processor = createDataProcessor('json');
+      processor.symbol = symbol;
+      console.log('Successfully loaded JSON data');
+    } catch (jsonError) {
+      console.log('JSON data not found, falling back to CSV:', jsonError.message);
+      try {
+        // Fall back to CSV data
+        const csvPath = path.join(__dirname, 'data', `${symbol}.csv`);
+        console.log(`Attempting to read CSV data from: ${csvPath}`);
+        const csvContent = await fs.readFile(csvPath, 'utf8');
+        processor = createDataProcessor('csv');
+        processor.symbol = symbol;
+        data = csvContent;
+        console.log('Successfully loaded CSV data');
+      } catch (csvError) {
+        console.error('Failed to read CSV data:', csvError.message);
+        return res.status(404).json({ error: 'Stock data not found' });
       }
     }
-    
-    // Read all files in the data directory
-    fs.readdir(dataDir, async (err, files) => {
-      if (err) {
-        console.error('Error reading data directory:', err);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Failed to read data directory' }));
-        return;
+
+    try {
+      // Try to read metrics data if available
+      const metricsPath = path.join(__dirname, 'data', `${symbol}_metrics.json`);
+      console.log(`Attempting to read metrics data from: ${metricsPath}`);
+      const metricsData = await fs.readFile(metricsPath, 'utf8');
+      metrics = JSON.parse(metricsData);
+      console.log('Successfully loaded metrics data');
+    } catch (metricsError) {
+      console.log('Metrics data not found:', metricsError.message);
+    }
+
+    try {
+      console.log('Processing data with processor');
+      const processedData = await processor.processData(data);
+      if (metrics) {
+        processedData.metrics = metrics;
       }
-      
-      // Filter for JSON and CSV files
-      const dataFiles = files.filter(file => file.endsWith('.json') || file.endsWith('.csv'));
-      
-      // Group files by stock symbol
-      const stockFiles = {};
-      for (const file of dataFiles) {
-        const symbol = path.basename(file, path.extname(file)).replace('_metrics', '');
-        if (!stockFiles[symbol]) {
-          stockFiles[symbol] = [];
-        }
-        stockFiles[symbol].push(file);
-      }
-      
-      // Build status object
-      const status = {
-        lastUpdated: new Date().toISOString(),
-        stocks: {}
-      };
-      
-      // Process each stock
-      for (const symbol of Object.keys(stockFiles)) {
-        // Skip metadata files
-        if (symbol === 'data_status' || symbol === 'volatility_metrics') {
-          continue;
-        }
-        
-        try {
-          // Check for CSV or JSON data file
-          const dataFile = stockFiles[symbol].find(file => 
-            file === `${symbol}.csv` || file === `${symbol}.json`);
-          
-          if (!dataFile) {
-            continue; // Skip if no data file found
-          }
-          
-          // Get file stats
-          const filePath = path.join(dataDir, dataFile);
-          const fileStats = await fs.promises.stat(filePath);
-          
-          // Read data to get details
-          let dataPoints = 0;
-          let startDate = null;
-          let endDate = null;
-          let dataComplete = false;
-          
-          if (dataFile.endsWith('.json') || dataFile.endsWith('.csv')) {
-            // Read data file
-            const fileData = await fs.promises.readFile(filePath, 'utf8');
-            const fileType = dataFile.endsWith('.json') ? 'json' : 'csv';
-            
-            // Parse the stock data using our common function
-            const parsedInfo = parseStockData(fileData, fileType);
-            
-            dataPoints = parsedInfo.dataPoints;
-            startDate = parsedInfo.startDate;
-            endDate = parsedInfo.endDate;
-            daysCovered = parsedInfo.daysCovered;
-            
-            console.log(`Processed ${symbol}: ${dataPoints} points, ${daysCovered} days covered`);
-            
-            // Check data freshness
-            if (endDate) {
-              const lastDate = new Date(endDate);
-              const now = new Date();
-              const daysDiff = Math.ceil((now - lastDate) / (1000 * 60 * 60 * 24));
-              
-              // Consider data complete if it's within the last 7 days
-              dataComplete = daysDiff <= 7;
-            } else {
-              // Use file modification time instead
-              const lastModified = new Date(fileStats.mtime);
-              const now = new Date();
-              const daysDiff = Math.ceil((now - lastModified) / (1000 * 60 * 60 * 24));
-              
-              // Consider data complete if file was modified recently
-              dataComplete = daysDiff <= 7;
-            }
-          } else {
-            // No data file
-            console.log(`No supported data file found for ${symbol}`);
-          }
-          
-          // Check for metrics file
-          const metricsFile = stockFiles[symbol].find(file => file === `${symbol}_metrics.json`);
-          let volatility = null;
-          let expectedReturn = null;
-          
-          if (metricsFile) {
-            const metricsPath = path.join(dataDir, metricsFile);
-            const metricsData = await fs.promises.readFile(metricsPath, 'utf8');
-            const metrics = JSON.parse(metricsData);
-            
-            volatility = metrics.volatility;
-            expectedReturn = metrics.expectedReturn;
-          }
-          
-          // Create status entry with all the information
-          status.stocks[symbol] = {
-            dataPoints,
-            startDate,
-            endDate,
-            dataComplete,
-            lastUpdated: new Date(fileStats.mtime).toISOString(),
-            volatility,
-            expectedReturn,
-            daysCovered,
-            gaps: [] // We'll calculate gaps if needed later
-          };
-          
-          console.log(`Added status for ${symbol}: ${dataPoints} points, ${daysCovered} days`);
-        } catch (error) {
-          console.error(`Error processing ${symbol}:`, error);
-          // Skip this stock on error
-        }
-      }
-      
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(status));
-    });
-    
-    return;
-  }
-  
-  // Handle fetch historical data endpoint
-  if (req.method === 'POST' && req.url === '/fetch-historical-data') {
-    let body = '';
-    
-    req.on('data', chunk => {
-      body += chunk.toString();
-    });
-    
-    req.on('end', () => {
-      try {
-        // Parse the JSON data
-        const requestData = JSON.parse(body);
-        const { symbol, years = 5, forceRefresh = false } = requestData;
-        
-        if (!symbol) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Symbol is required' }));
-          return;
-        }
-        
-        // Fetch historical data
-        fetchHistoricalData(symbol, years, forceRefresh)
-          .then(result => {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(result));
-          })
-          .catch(error => {
-            console.error('Error fetching historical data:', error);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ 
-              success: false,
-              error: 'Failed to fetch historical data',
-              message: error.message
-            }));
-          });
-      } catch (error) {
-        console.error('Error parsing request data:', error);
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid request data' }));
-      }
-    });
-    
-    return;
-  }
-  
-  // Handle delete historical data endpoint
-  if (req.method === 'POST' && req.url === '/delete-historical-data') {
-    let body = '';
-    
-    req.on('data', chunk => {
-      body += chunk.toString();
-    });
-    
-    req.on('end', () => {
-      try {
-        // Parse the JSON data
-        const requestData = JSON.parse(body);
-        const { symbol } = requestData;
-        
-        if (!symbol) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Symbol is required' }));
-          return;
-        }
-        
-        // Delete historical data
-        deleteHistoricalData(symbol)
-          .then(result => {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(result));
-          })
-          .catch(error => {
-            console.error('Error deleting historical data:', error);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ 
-              success: false,
-              error: 'Failed to delete historical data',
-              message: error.message
-            }));
-          });
-      } catch (error) {
-        console.error('Error parsing request data:', error);
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid request data' }));
-      }
-    });
-    
-    return;
-  }
-  
-  // Handle fill data gaps endpoint
-  if (req.method === 'POST' && req.url === '/fill-data-gaps') {
-    let body = '';
-    
-    req.on('data', chunk => {
-      body += chunk.toString();
-    });
-    
-    req.on('end', () => {
-      try {
-        // Parse the JSON data
-        const requestData = JSON.parse(body);
-        const { symbol, gaps } = requestData;
-        
-        if (!symbol || !gaps || !Array.isArray(gaps) || gaps.length === 0) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Symbol and gaps are required' }));
-          return;
-        }
-        
-        // Process each gap
-        let fetchPromises = [];
-        for (const gap of gaps) {
-          // Create a date range for the gap
-          const startDate = new Date(gap.start);
-          const endDate = new Date(gap.end);
-          
-          // Use 1-month chunk size for improved incremental loading
-          // Custom fetch for this specific gap
-          fetchPromises.push(
-            fetchHistoricalData(symbol, 1, false, {
-              specificGap: {
-                start: startDate,
-                end: endDate
-              },
-              chunkSize: 30, // 1 month chunks
-              minDataPoints: 250 // ~1 year of trading days
-            })
-          );
-        }
-        
-        // Wait for all fetches to complete
-        Promise.all(fetchPromises)
-          .then(results => {
-            // Combine results
-            const successCount = results.filter(r => r.success).length;
-            const newDataPoints = results.reduce((sum, r) => sum + (r.newDataCount || 0), 0);
-            
-            if (successCount === gaps.length) {
-              res.writeHead(200, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({
-                success: true,
-                message: `Successfully filled ${successCount} gaps with ${newDataPoints} new data points.`,
-                results
-              }));
-            } else {
-              res.writeHead(200, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({
-                success: true,
-                message: `Partially filled gaps. Filled ${successCount} out of ${gaps.length} gaps with ${newDataPoints} new data points.`,
-                results
-              }));
-            }
-          })
-          .catch(error => {
-            console.error('Error filling data gaps:', error);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ 
-              success: false,
-              error: 'Failed to fill data gaps',
-              message: error.message
-            }));
-          });
-      } catch (error) {
-        console.error('Error parsing request data:', error);
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid request data' }));
-      }
-    });
-    
-    return;
-  }
-  
-  // Handle calculate volatility endpoint
-  if (req.method === 'POST' && req.url === '/calculate-volatility') {
-    calculateAllVolatilityMetricsCustom()
-      .then(result => {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(result));
-      })
-      .catch(error => {
-        console.error('Error calculating volatility:', error);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ 
-          success: false,
-          error: 'Failed to calculate volatility',
-          message: error.message
-        }));
+      console.log('Successfully processed data:', {
+        dataPoints: processedData.dataPoints,
+        startDate: processedData.startDate,
+        endDate: processedData.endDate,
+        daysCovered: processedData.daysCovered
       });
-    return;
+      res.json(processedData);
+    } catch (processError) {
+      console.error('Error processing data:', processError);
+      console.error('Error stack:', processError.stack);
+      res.status(500).json({ error: 'Failed to process stock data' });
+    }
+  } catch (error) {
+    console.error('Unexpected error in data-availability endpoint:', error);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ error: 'Internal server error' });
   }
+});
+
+// Handle save settings endpoint
+server.post('/save-settings', (req, res) => {
+  let body = '';
   
-  // Handle volatility metrics endpoint
-  if (req.method === 'GET' && req.url === '/volatility-metrics') {
-    getVolatilityMetrics()
-      .then(metrics => {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(metrics));
-      })
-      .catch(error => {
-        console.error('Error getting volatility metrics:', error);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Failed to get volatility metrics' }));
+  req.on('data', chunk => {
+    body += chunk.toString();
+  });
+  
+  req.on('end', () => {
+    try {
+      // Parse the JSON data
+      const settingsData = JSON.parse(body);
+      
+      // Save to file
+      fs.writeFile(SETTINGS_FILE, JSON.stringify(settingsData, null, 2), err => {
+        if (err) {
+          console.error('Error saving settings:', err);
+          res.status(500).json({ error: 'Failed to save settings' });
+          return;
+        }
+        
+        res.status(200).json({ success: true, message: 'Settings saved successfully' });
       });
-    
-    return;
-  }
+    } catch (error) {
+      console.error('Error parsing settings data:', error);
+      res.status(400).json({ error: 'Invalid settings data' });
+    }
+  });
   
-  // Import the data provider module
-  const { createDataProvider } = require('./data_provider');
-  
-  // Handle data availability endpoint
-  if (req.method === 'GET' && req.url.startsWith('/data-availability')) {
-    // Parse symbol from query parameters
-    const urlObj = new URL(req.url, `http://${req.headers.host}`);
-    const symbol = urlObj.searchParams.get('symbol');
-    
-    if (!symbol) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Symbol parameter is required' }));
+  return;
+});
+
+// Handle load settings endpoint
+server.get('/load-settings', (req, res) => {
+  fs.readFile(SETTINGS_FILE, (err, data) => {
+    if (err) {
+      if (err.code === 'ENOENT') {
+        // Settings file doesn't exist yet
+        res.status(404).json({ error: 'No saved settings found' });
+      } else {
+        console.error('Error reading settings:', err);
+        res.status(500).json({ error: 'Failed to load settings' });
+      }
       return;
     }
     
     try {
-      // Use the data provider to get complete stock data
-      createDataProvider(symbol)
-        .then(provider => provider.getCompleteData())
-        .then(stockData => {
-          // Return the data
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(stockData));
-        })
-        .catch(error => {
-          // Handle errors
-          console.error(`Error loading data for ${symbol}:`, error);
-          res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            symbol,
-            dataPoints: 0,
-            startDate: null,
-            endDate: null,
-            daysCovered: 0,
-            metrics: null,
-            error: error.message || 'No data found for this symbol'
-          }));
-        });
+      // Parse the JSON data
+      const settingsData = JSON.parse(data);
+      
+      res.status(200).json(settingsData);
     } catch (error) {
-      console.error(`Error processing request for ${symbol}:`, error);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Internal server error' }));
+      console.error('Error parsing settings file:', error);
+      res.status(500).json({ error: 'Invalid settings file format' });
+    }
+  });
+  
+  return;
+});
+
+// Handle data status endpoint
+server.get('/data-status', async (req, res) => {
+  // Read directly from the data directory instead of using the status file
+  const dataDir = path.join(__dirname, 'data');
+  
+  // Ensure the data directory exists
+  try {
+    await fs.mkdir(dataDir, { recursive: true });
+  } catch (err) {
+    if (err.code !== 'EEXIST') {
+      console.error('Error creating data directory:', err);
+      res.status(500).json({ error: 'Failed to ensure data directory exists' });
+      return;
+    }
+  }
+  
+  // Read all files in the data directory
+  const files = await fs.readdir(dataDir);
+  
+  // Filter for JSON and CSV files
+  const dataFiles = files.filter(file => file.endsWith('.json') || file.endsWith('.csv'));
+  
+  // Group files by stock symbol
+  const stockFiles = {};
+  for (const file of dataFiles) {
+    const symbol = path.basename(file, path.extname(file)).replace('_metrics', '');
+    if (!stockFiles[symbol]) {
+      stockFiles[symbol] = [];
+    }
+    stockFiles[symbol].push(file);
+  }
+  
+  // Build status object
+  const status = {
+    lastUpdated: new Date().toISOString(),
+    stocks: {}
+  };
+  
+  // Process each stock
+  for (const symbol of Object.keys(stockFiles)) {
+    // Skip metadata files
+    if (symbol === 'data_status' || symbol === 'volatility_metrics') {
+      continue;
     }
     
-    return;
-  }
-  
-  // Handle on-demand volatility calculation endpoint
-  if (req.method === 'POST' && req.url === '/calculate-volatility-on-demand') {
-    let body = '';
-    
-    req.on('data', chunk => {
-      body += chunk.toString();
-    });
-    
-    req.on('end', () => {
-      try {
-        // Parse the JSON data
-        const requestData = JSON.parse(body);
-        const { symbol } = requestData;
-        
-        if (!symbol) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Symbol is required' }));
-          return;
-        }
-        
-        // Use data provider to get the historical data
-        createDataProvider(symbol)
-          .then(async provider => {
-            // Get the price data
-            const data = await provider.getData();
-            const metadata = await provider.getMetadata();
-            
-            console.log(`Got data for ${symbol}: ${data.length} data points`);
-            
-            if (!data || data.length < 30) {
-              res.writeHead(400, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ 
-                error: 'Insufficient data',
-                message: `Need at least 30 data points for ${symbol}, but only have ${data ? data.length : 0}`
-              }));
-              return;
-            }
-            
-            // Calculate daily returns from prices
-            const returnsArray = [];
-            
-            // Sort data by date just to be sure
-            data.sort((a, b) => new Date(a.Date) - new Date(b.Date));
-            
-            // Calculate daily returns from prices
-            for (let i = 1; i < data.length; i++) {
-              const prevPrice = data[i-1]['Adj Close'] || data[i-1].Close;
-              const currPrice = data[i]['Adj Close'] || data[i].Close;
-              
-              if (prevPrice && currPrice && prevPrice > 0) {
-                returnsArray.push({
-                  date: data[i].Date,
-                  return: currPrice / prevPrice - 1
-                });
-              }
-            }
-            
-            if (returnsArray.length < 30) {
-              res.writeHead(400, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ 
-                error: 'Insufficient return data',
-                message: `Need at least 30 return data points for ${symbol}, but could only calculate ${returnsArray.length}`
-              }));
-              return;
-            }
-            
-            // Use only the most recent year of data (approximately 252 trading days)
-            const recentReturns = returnsArray.length > 252 ? 
-              returnsArray.slice(-252) : returnsArray;
-            
-            // Calculate volatility and expected return
-            const volatility = calculateVolatility(recentReturns);
-            const expectedReturn = calculateAnnualizedReturn(recentReturns);
-            
-            // Check for valid results
-            if (!isFinite(volatility) || volatility <= 0 || !isFinite(expectedReturn)) {
-              res.writeHead(400, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ 
-                error: 'Invalid calculation results',
-                message: 'Could not calculate valid volatility or return values'
-              }));
-              return;
-            }
-            
-            // Apply reasonable constraints
-            let adjustedReturn = expectedReturn;
-            if (adjustedReturn > 0.6) adjustedReturn = 0.6;
-            if (adjustedReturn < -0.2) adjustedReturn = -0.2;
-            
-            // Create metrics object
-            const metrics = {
-              symbol,
-              dataPoints: returnsArray.length,
-              recentDataPoints: recentReturns.length,
-              lastCalculatedDate: new Date().toISOString(),
-              volatility,
-              expectedReturn: adjustedReturn,
-              originalExpectedReturn: expectedReturn,
-              daysCovered: metadata.daysCovered,
-              synthetic: false
-            };
-            
-            // Save metrics
-            const metricsFile = path.join(DATA_DIR, `${symbol}_metrics.json`);
-            await fs.promises.writeFile(metricsFile, JSON.stringify(metrics, null, 2));
-            
-            // Update status - we need to handle this differently now
-            try {
-              // Get data status
-              const status = await getDataStatus();
-              
-              // Update status directly
-              if (status.stocks[symbol]) {
-                status.stocks[symbol].volatility = metrics.volatility;
-                status.stocks[symbol].expectedReturn = metrics.expectedReturn;
-                status.stocks[symbol].lastMetricsUpdate = new Date().toISOString();
-                
-                // Save status
-                await fs.promises.writeFile(path.join(DATA_DIR, 'data_status.json'), 
-                  JSON.stringify(status, null, 2));
-              }
-            } catch (statusErr) {
-              console.error(`Error updating status for ${symbol}:`, statusErr);
-              // Continue anyway, not critical
-            }
-            
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ 
-              success: true,
-              message: `Successfully calculated volatility metrics for ${symbol}`,
-              metrics
-            }));
-          })
-          .catch(error => {
-            console.error(`Error calculating volatility for ${symbol}:`, error);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ 
-              error: `Failed to calculate volatility for ${symbol}`,
-              message: error.message
-            }));
-          });
-      } catch (error) {
-        console.error('Error parsing request data:', error);
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid request data' }));
+    try {
+      // Check for CSV or JSON data file
+      const dataFile = stockFiles[symbol].find(file => 
+        file === `${symbol}.csv` || file === `${symbol}.json`);
+      
+      if (!dataFile) {
+        continue; // Skip if no data file found
       }
-    });
-    
-    return;
+      
+      // Get file stats
+      const filePath = path.join(dataDir, dataFile);
+      const fileStats = await fs.stat(filePath);
+      
+      // Read data to get details
+      let dataPoints = 0;
+      let startDate = null;
+      let endDate = null;
+      let dataComplete = false;
+      
+      if (dataFile.endsWith('.json') || dataFile.endsWith('.csv')) {
+        // Read data file
+        const fileData = await fs.readFile(filePath, 'utf8');
+        const fileType = dataFile.endsWith('.json') ? 'json' : 'csv';
+        
+        // Parse the stock data using our common function
+        const parsedInfo = parseStockData(fileData, fileType);
+        
+        dataPoints = parsedInfo.dataPoints;
+        startDate = parsedInfo.startDate;
+        endDate = parsedInfo.endDate;
+        daysCovered = parsedInfo.daysCovered;
+        
+        console.log(`Processed ${symbol}: ${dataPoints} points, ${daysCovered} days covered`);
+        
+        // Check data freshness
+        if (endDate) {
+          const lastDate = new Date(endDate);
+          const now = new Date();
+          const daysDiff = Math.ceil((now - lastDate) / (1000 * 60 * 60 * 24));
+          
+          // Consider data complete if it's within the last 7 days
+          dataComplete = daysDiff <= 7;
+        } else {
+          // Use file modification time instead
+          const lastModified = new Date(fileStats.mtime);
+          const now = new Date();
+          const daysDiff = Math.ceil((now - lastModified) / (1000 * 60 * 60 * 24));
+          
+          // Consider data complete if file was modified recently
+          dataComplete = daysDiff <= 7;
+        }
+      } else {
+        // No data file
+        console.log(`No supported data file found for ${symbol}`);
+      }
+      
+      // Check for metrics file
+      const metricsFile = stockFiles[symbol].find(file => file === `${symbol}_metrics.json`);
+      let volatility = null;
+      let expectedReturn = null;
+      
+      if (metricsFile) {
+        const metricsPath = path.join(dataDir, metricsFile);
+        const metricsData = await fs.readFile(metricsPath, 'utf8');
+        const metrics = JSON.parse(metricsData);
+        
+        volatility = metrics.volatility;
+        expectedReturn = metrics.expectedReturn;
+      }
+      
+      // Create status entry with all the information
+      status.stocks[symbol] = {
+        dataPoints,
+        startDate,
+        endDate,
+        dataComplete,
+        lastUpdated: new Date(fileStats.mtime).toISOString(),
+        volatility,
+        expectedReturn,
+        daysCovered,
+        gaps: [] // We'll calculate gaps if needed later
+      };
+      
+      console.log(`Added status for ${symbol}: ${dataPoints} points, ${daysCovered} days`);
+    } catch (error) {
+      console.error(`Error processing ${symbol}:`, error);
+      // Skip this stock on error
+    }
   }
   
-  // Handle list-stocks endpoint
-  if (req.method === 'GET' && req.url === '/list-stocks') {
-    const dataDir = path.join(__dirname, 'data');
-    
-    // Read all files in the data directory
-    fs.readdir(dataDir, (err, files) => {
-      if (err) {
-        console.error('Error reading data directory:', err);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Failed to read data directory' }));
+  res.status(200).json(status);
+});
+
+// Handle fetch historical data endpoint
+server.post('/fetch-historical-data', async (req, res) => {
+  let body = '';
+  
+  req.on('data', chunk => {
+    body += chunk.toString();
+  });
+  
+  req.on('end', async () => {
+    try {
+      // Parse the JSON data
+      const requestData = JSON.parse(body);
+      const { symbol, years = 5, forceRefresh = false } = requestData;
+      
+      if (!symbol) {
+        res.status(400).json({ error: 'Symbol is required' });
         return;
       }
       
-      // Filter for JSON and CSV files
-      const dataFiles = files.filter(file => file.endsWith('.json') || file.endsWith('.csv'));
+      // Fetch historical data
+      const result = await fetchHistoricalData(symbol, years, forceRefresh);
       
-      // Extract stock symbols
-      const stockSymbols = dataFiles
-        .map(file => path.basename(file, path.extname(file)))
-        .filter(symbol => 
-          symbol !== 'data_status' && 
-          symbol !== 'volatility_metrics' && 
-          !symbol.endsWith('_metrics'));
-      
-      // Remove duplicates
-      const uniqueSymbols = [...new Set(stockSymbols)];
-      
-      // Return the list
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ stocks: uniqueSymbols }));
-    });
-    
-    return;
-  }
-  
-  // Handle static files
-  // Parse the URL to extract the path without query parameters
-  const urlObj = new URL(req.url, `http://${req.headers.host}`);
-  let filePath = urlObj.pathname === '/' ? 
-    path.join(__dirname, 'index.html') : 
-    path.join(__dirname, urlObj.pathname);
-  
-  // Get file extension
-  const extname = path.extname(filePath);
-  
-  // Default content type
-  let contentType = MIME_TYPES[extname] || 'text/plain';
-  
-  // Read file
-  fs.readFile(filePath, (err, content) => {
-    if (err) {
-      if (err.code === 'ENOENT') {
-        // Page not found
-        fs.readFile(path.join(__dirname, '404.html'), (err, content) => {
-          res.writeHead(404, { 'Content-Type': 'text/html' });
-          res.end(content || '<h1>404 Not Found</h1>', 'utf8');
-        });
-      } else {
-        // Server error
-        res.writeHead(500);
-        res.end(`Server Error: ${err.code}`);
-      }
-    } else {
-      // Success
-      res.writeHead(200, { 'Content-Type': contentType });
-      res.end(content, 'utf8');
+      res.status(200).json(result);
+    } catch (error) {
+      console.error('Error fetching historical data:', error);
+      res.status(500).json({ 
+        success: false,
+        error: 'Failed to fetch historical data',
+        message: error.message
+      });
     }
   });
 });
+
+// Handle delete historical data endpoint
+server.post('/delete-historical-data', async (req, res) => {
+  let body = '';
+  
+  req.on('data', chunk => {
+    body += chunk.toString();
+  });
+  
+  req.on('end', async () => {
+    try {
+      // Parse the JSON data
+      const requestData = JSON.parse(body);
+      const { symbol } = requestData;
+      
+      if (!symbol) {
+        res.status(400).json({ error: 'Symbol is required' });
+        return;
+      }
+      
+      // Delete historical data
+      const result = await deleteHistoricalData(symbol);
+      
+      res.status(200).json(result);
+    } catch (error) {
+      console.error('Error deleting historical data:', error);
+      res.status(500).json({ 
+        success: false,
+        error: 'Failed to delete historical data',
+        message: error.message
+      });
+    }
+  });
+});
+
+// Handle fill data gaps endpoint
+server.post('/fill-data-gaps', async (req, res) => {
+  let body = '';
+  
+  req.on('data', chunk => {
+    body += chunk.toString();
+  });
+  
+  req.on('end', async () => {
+    try {
+      // Parse the JSON data
+      const requestData = JSON.parse(body);
+      const { symbol, gaps } = requestData;
+      
+      if (!symbol || !gaps || !Array.isArray(gaps) || gaps.length === 0) {
+        res.status(400).json({ error: 'Symbol and gaps are required' });
+        return;
+      }
+      
+      // Process each gap
+      let fetchPromises = [];
+      for (const gap of gaps) {
+        // Create a date range for the gap
+        const startDate = new Date(gap.start);
+        const endDate = new Date(gap.end);
+        
+        // Use 1-month chunk size for improved incremental loading
+        // Custom fetch for this specific gap
+        fetchPromises.push(
+          fetchHistoricalData(symbol, 1, false, {
+            specificGap: {
+              start: startDate,
+              end: endDate
+            },
+            chunkSize: 30, // 1 month chunks
+            minDataPoints: 250 // ~1 year of trading days
+          })
+        );
+      }
+      
+      // Wait for all fetches to complete
+      const results = await Promise.all(fetchPromises);
+      
+      // Combine results
+      const successCount = results.filter(r => r.success).length;
+      const newDataPoints = results.reduce((sum, r) => sum + (r.newDataCount || 0), 0);
+      
+      if (successCount === gaps.length) {
+        res.status(200).json({
+          success: true,
+          message: `Successfully filled ${successCount} gaps with ${newDataPoints} new data points.`,
+          results
+        });
+      } else {
+        res.status(200).json({
+          success: true,
+          message: `Partially filled gaps. Filled ${successCount} out of ${gaps.length} gaps with ${newDataPoints} new data points.`,
+          results
+        });
+      }
+    } catch (error) {
+      console.error('Error filling data gaps:', error);
+      res.status(500).json({ 
+        success: false,
+        error: 'Failed to fill data gaps',
+        message: error.message
+      });
+    }
+  });
+});
+
+// Handle calculate volatility endpoint
+server.post('/calculate-volatility', async (req, res) => {
+  try {
+    const result = await calculateAllVolatilityMetricsCustom();
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('Error calculating volatility:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to calculate volatility',
+      message: error.message
+    });
+  }
+});
+
+// Handle volatility metrics endpoint
+server.get('/volatility-metrics', async (req, res) => {
+  try {
+    const metrics = await getVolatilityMetrics();
+    res.status(200).json(metrics);
+  } catch (error) {
+    console.error('Error getting volatility metrics:', error);
+    res.status(500).json({ error: 'Failed to get volatility metrics' });
+  }
+});
+
+// Handle list-stocks endpoint
+server.get('/list-stocks', (req, res) => {
+  const dataDir = path.join(__dirname, 'data');
+  
+  // Read all files in the data directory
+  fs.readdir(dataDir, (err, files) => {
+    if (err) {
+      console.error('Error reading data directory:', err);
+      res.status(500).json({ error: 'Failed to read data directory' });
+      return;
+    }
+    
+    // Filter for JSON and CSV files
+    const dataFiles = files.filter(file => file.endsWith('.json') || file.endsWith('.csv'));
+    
+    // Extract stock symbols
+    const stockSymbols = dataFiles
+      .map(file => path.basename(file, path.extname(file)))
+      .filter(symbol => 
+        symbol !== 'data_status' && 
+        symbol !== 'volatility_metrics' && 
+        !symbol.endsWith('_metrics'));
+    
+    // Remove duplicates
+    const uniqueSymbols = [...new Set(stockSymbols)];
+    
+    // Return the list
+    res.status(200).json({ stocks: uniqueSymbols });
+  });
+});
+
+// Handle static files
+server.use(express.static(__dirname, {
+  setHeaders: (res, path) => {
+    // Set proper MIME types
+    const ext = path.split('.').pop().toLowerCase();
+    if (MIME_TYPES[`.${ext}`]) {
+      res.setHeader('Content-Type', MIME_TYPES[`.${ext}`]);
+    }
+    
+    // Add security headers
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+  }
+}));
 
 /**
  * Parse stock data from JSON or CSV file
@@ -970,13 +765,13 @@ async function readHistoricalDataFromJson(symbol) {
   try {
     // First try JSON file
     try {
-      const fileData = await fs.promises.readFile(jsonFile, 'utf8');
+      const fileData = await fs.readFile(jsonFile, 'utf8');
       const parsedInfo = parseStockData(fileData, 'json');
       
       // Get metrics if available
       let metrics = null;
       try {
-        const metricsData = await fs.promises.readFile(metricsFile, 'utf8');
+        const metricsData = await fs.readFile(metricsFile, 'utf8');
         metrics = JSON.parse(metricsData);
       } catch (metricsErr) {
         // No metrics file, that's okay
@@ -995,13 +790,13 @@ async function readHistoricalDataFromJson(symbol) {
       };
     } catch (jsonErr) {
       // If JSON file doesn't exist, try CSV
-      const fileData = await fs.promises.readFile(csvFile, 'utf8');
+      const fileData = await fs.readFile(csvFile, 'utf8');
       const parsedInfo = parseStockData(fileData, 'csv');
       
       // Get metrics if available
       let metrics = null;
       try {
-        const metricsData = await fs.promises.readFile(metricsFile, 'utf8');
+        const metricsData = await fs.readFile(metricsFile, 'utf8');
         metrics = JSON.parse(metricsData);
       } catch (metricsErr) {
         // No metrics file, that's okay
@@ -1024,152 +819,6 @@ async function readHistoricalDataFromJson(symbol) {
   }
 }
 
-// Note: The old processDataFile function has been replaced by the 
-// StockDataProvider functionality in data_provider.js
-
-/**
- * Convert CSV content to structured data array
- * @param {string} csvContent - CSV file content
- * @returns {Array} - Array of objects with date and price data
- */
-function convertCsvToStructuredData(csvContent) {
-  // Parse CSV lines
-  const lines = csvContent.trim().split('\n');
-  
-  if (lines.length <= 1) {
-    return [];
-  }
-  
-  // Parse headers and find necessary columns
-  const headers = lines[0].split(',').map(h => h.trim());
-  const dateIndex = headers.indexOf('Date');
-  
-  // Look for Close column, accounting for variant names
-  let closeIndex = headers.indexOf('Close');
-  if (closeIndex === -1) {
-    closeIndex = headers.indexOf('Close/Last');
-  }
-  
-  const adjCloseIndex = headers.indexOf('Adj Close');
-  const volumeIndex = headers.indexOf('Volume');
-  const openIndex = headers.indexOf('Open');
-  const highIndex = headers.indexOf('High');
-  const lowIndex = headers.indexOf('Low');
-  
-  if (dateIndex === -1) {
-    console.error('CSV is missing Date column');
-    return [];
-  }
-  
-  // Use Close if Adj Close isn't available
-  const priceIndex = adjCloseIndex !== -1 ? adjCloseIndex : closeIndex;
-  
-  if (priceIndex === -1) {
-    console.error('CSV is missing both Close and Adj Close columns');
-    return [];
-  }
-  
-  // Convert each line to a structured object
-  const structuredData = [];
-  
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    
-    const fields = line.split(',');
-    if (fields.length <= Math.max(dateIndex, priceIndex)) continue;
-    
-    // Extract values
-    const dateStr = fields[dateIndex];
-    
-    // Clean values by removing $ and commas
-    const cleanValue = (idx) => {
-      if (idx === -1 || idx >= fields.length) return '';
-      let val = fields[idx].trim();
-      return val.replace(/[$,]/g, '');
-    };
-    
-    const closeStr = cleanValue(closeIndex !== -1 ? closeIndex : priceIndex);
-    const adjCloseStr = cleanValue(adjCloseIndex !== -1 ? adjCloseIndex : priceIndex);
-    
-    const close = parseFloat(closeStr);
-    const adjClose = parseFloat(adjCloseStr);
-    
-    if (!dateStr || (isNaN(close) && isNaN(adjClose))) continue;
-    
-    // Create data object
-    const dataObject = {
-      Date: dateStr,
-      Close: isNaN(close) ? null : close
-    };
-    
-    // Add Adj Close if available
-    if (adjCloseIndex !== -1 && !isNaN(adjClose)) {
-      dataObject['Adj Close'] = adjClose;
-    }
-    
-    // Add Volume if available
-    if (volumeIndex !== -1 && fields.length > volumeIndex) {
-      const volume = parseInt(fields[volumeIndex]);
-      if (!isNaN(volume)) {
-        dataObject.Volume = volume;
-      }
-    }
-    
-    // Add Open, High, Low if available
-    if (openIndex !== -1 && fields.length > openIndex) {
-      const open = parseFloat(fields[openIndex]);
-      if (!isNaN(open)) {
-        dataObject.Open = open;
-      }
-    }
-    
-    if (highIndex !== -1 && fields.length > highIndex) {
-      const high = parseFloat(fields[highIndex]);
-      if (!isNaN(high)) {
-        dataObject.High = high;
-      }
-    }
-    
-    if (lowIndex !== -1 && fields.length > lowIndex) {
-      const low = parseFloat(fields[lowIndex]);
-      if (!isNaN(low)) {
-        dataObject.Low = low;
-      }
-    }
-    
-    structuredData.push(dataObject);
-  }
-  
-  return structuredData;
-}
-
-/**
- * Calculates volatility (standard deviation) from returns
- * @param {Array} returns - Array of return objects
- * @returns {number} - Annualized volatility
- */
-function calculateVolatility(returns) {
-  // Extract return values
-  const returnValues = returns.map(r => r.return);
-  
-  // Calculate mean
-  const mean = returnValues.reduce((sum, val) => sum + val, 0) / returnValues.length;
-  
-  // Calculate sum of squared differences
-  const squaredDiffs = returnValues.map(val => Math.pow(val - mean, 2));
-  const sumSquaredDiffs = squaredDiffs.reduce((sum, val) => sum + val, 0);
-  
-  // Calculate variance
-  const variance = sumSquaredDiffs / (returnValues.length - 1);
-  
-  // Calculate daily standard deviation
-  const dailyStdDev = Math.sqrt(variance);
-  
-  // Annualize (multiply by square root of trading days in a year)
-  return dailyStdDev * Math.sqrt(252);
-}
-
 /**
  * Calculates volatility metrics for all stocks with custom implementation
  * @returns {Promise<Object>} - Results of calculation
@@ -1179,7 +828,7 @@ async function calculateAllVolatilityMetricsCustom() {
     const dataDir = DATA_DIR;
     
     // Read all files in data directory
-    const files = await fs.promises.readdir(dataDir);
+    const files = await fs.readdir(dataDir);
     
     // Filter for JSON and CSV files that aren't metrics files
     const dataFiles = files.filter(file => 
@@ -1334,7 +983,7 @@ async function calculateAllVolatilityMetricsCustom() {
         
         // Save metrics
         const metricsFile = path.join(dataDir, `${symbol}_metrics.json`);
-        await fs.promises.writeFile(metricsFile, JSON.stringify(metrics, null, 2));
+        await fs.writeFile(metricsFile, JSON.stringify(metrics, null, 2));
         
         // Add to results
         results.metrics[symbol] = metrics;
@@ -1373,7 +1022,7 @@ async function calculateAllVolatilityMetricsCustom() {
       
       // Try to read existing settings
       try {
-        const settingsData = await fs.promises.readFile(settingsPath, 'utf8');
+        const settingsData = await fs.readFile(settingsPath, 'utf8');
         settings = JSON.parse(settingsData);
       } catch (readErr) {
         // No settings file, that's okay
@@ -1390,7 +1039,7 @@ async function calculateAllVolatilityMetricsCustom() {
       }
       
       // Save updated settings
-      await fs.promises.writeFile(settingsPath, JSON.stringify(settings, null, 2));
+      await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
     } catch (settingsErr) {
       console.error('Error updating settings:', settingsErr);
     }
@@ -1458,9 +1107,3 @@ server.listen(PORT, () => {
   console.log(`Open your browser to see the Kelly Criterion visualization`);
   console.log(`Using modern data provider architecture for improved data handling`);
 });
-
-// Note: The following functions have been replaced by the StockDataProvider classes in data_provider.js:
-// - parseStockData()
-// - readHistoricalDataFromJson()
-// - processDataFile()
-// - convertCsvToStructuredData()
