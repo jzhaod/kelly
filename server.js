@@ -4,9 +4,22 @@
 
 const express = require('express');
 const app = express();
-const fs = require('fs').promises;
+const fs = require('fs');
+const fsPromises = require('fs').promises;
 const path = require('path');
 const { createDataProcessor } = require('./data_processor');
+
+// Import utility functions for financial calculations
+const {
+  calculateVolatility,
+  calculateExpectedReturnCAPM,
+  calculateBeta,
+  calculateDailyReturns,
+  calculateCorrelationMatrix,
+  calculateRiskReturnRatio,
+  calculateSharpeRatio,
+  analyzePortfolio
+} = require('./utils');
 
 const PORT = 3000;
 const SETTINGS_FILE = path.join(__dirname, 'stock_settings.json');
@@ -14,7 +27,7 @@ const SETTINGS_FILE = path.join(__dirname, 'stock_settings.json');
 // Data directory
 const DATA_DIR = path.join(__dirname, 'data');
 
-// Import historical data functionality
+// Import required modules
 const { 
   getDataStatus,
   fetchHistoricalData,
@@ -24,6 +37,16 @@ const {
   getVolatilityMetrics,
   updateSettingsWithVolatilityMetrics
 } = require('./historical_data');
+
+// Import advanced Kelly criterion module
+const {
+  calculateAdvancedKelly,
+  calculateSimplifiedKelly,
+  calculateReturns,
+  calculateVolatility: calcKellyVolatility,
+  calculateCorrelationMatrix: kellyCorrelationMatrix,
+  calculateExpectedReturns
+} = require('./advanced_kelly');
 
 const MIME_TYPES = {
   '.html': 'text/html',
@@ -124,56 +147,96 @@ server.post('/save-settings', (req, res) => {
     body += chunk.toString();
   });
   
-  req.on('end', () => {
+  req.on('end', async () => {
     try {
+      console.log('Saving settings...');
+      
       // Parse the JSON data
       const settingsData = JSON.parse(body);
       
-      // Save to file
-      fs.writeFile(SETTINGS_FILE, JSON.stringify(settingsData, null, 2), err => {
-        if (err) {
-          console.error('Error saving settings:', err);
-          res.status(500).json({ error: 'Failed to save settings' });
-          return;
+      // Create a timestamp for the backup
+      const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\./g, '-');
+      const backupFileName = `stock_settings_backup_${timestamp}.json`;
+      const backupPath = path.join(__dirname, 'backup', backupFileName);
+      
+      // Create a temporary new settings file with a unique name
+      const tempSettingsFile = path.join(__dirname, `stock_settings_new_${timestamp}.json`);
+      
+      try {
+        // Step 1: Check if there's an existing settings file to back up
+        try {
+          const currentSettings = await fsPromises.readFile(SETTINGS_FILE, 'utf8');
+          // Step 2: Save backup of existing settings if found
+          await fsPromises.writeFile(backupPath, currentSettings);
+          console.log(`Created backup at ${backupPath}`);
+        } catch (backupErr) {
+          // No existing file to back up, that's okay
+          console.log('No existing settings file to back up');
         }
         
-        res.status(200).json({ success: true, message: 'Settings saved successfully' });
-      });
-    } catch (error) {
-      console.error('Error parsing settings data:', error);
-      res.status(400).json({ error: 'Invalid settings data' });
+        // Step 3: Write new settings to a temporary file first
+        await fsPromises.writeFile(tempSettingsFile, JSON.stringify(settingsData, null, 2));
+        console.log(`Created temporary settings at ${tempSettingsFile}`);
+        
+        // Step 4: Rename the temporary file to the real settings file
+        // This is more atomic than directly writing to the destination
+        try {
+          await fsPromises.rename(tempSettingsFile, SETTINGS_FILE);
+          console.log(`Renamed temporary settings to ${SETTINGS_FILE}`);
+        } catch (renameErr) {
+          // If rename fails (e.g., across devices), try copying instead
+          console.log('Rename failed, falling back to copy operation');
+          const tempContent = await fsPromises.readFile(tempSettingsFile, 'utf8');
+          await fsPromises.writeFile(SETTINGS_FILE, tempContent);
+          
+          // Clean up temp file
+          try {
+            await fsPromises.unlink(tempSettingsFile);
+          } catch (unlinkErr) {
+            console.log('Failed to delete temporary file:', unlinkErr.message);
+          }
+        }
+        
+        // Successfully saved
+        res.status(200).json({ 
+          success: true, 
+          message: 'Settings saved successfully',
+          backup: backupPath
+        });
+      } catch (fsError) {
+        console.error('File system error during settings save:', fsError);
+        res.status(500).json({ error: 'Failed to save settings', details: fsError.message });
+      }
+    } catch (parseError) {
+      console.error('Error parsing settings data:', parseError);
+      res.status(400).json({ error: 'Invalid settings data', details: parseError.message });
     }
   });
-  
-  return;
 });
 
 // Handle load settings endpoint
-server.get('/load-settings', (req, res) => {
-  fs.readFile(SETTINGS_FILE, (err, data) => {
-    if (err) {
-      if (err.code === 'ENOENT') {
-        // Settings file doesn't exist yet
-        res.status(404).json({ error: 'No saved settings found' });
-      } else {
-        console.error('Error reading settings:', err);
-        res.status(500).json({ error: 'Failed to load settings' });
-      }
-      return;
-    }
+server.get('/load-settings', async (req, res) => {
+  try {
+    // Use fs promises to read file
+    const data = await fsPromises.readFile(SETTINGS_FILE, 'utf8');
     
     try {
       // Parse the JSON data
       const settingsData = JSON.parse(data);
-      
       res.status(200).json(settingsData);
-    } catch (error) {
-      console.error('Error parsing settings file:', error);
+    } catch (parseError) {
+      console.error('Error parsing settings file:', parseError);
       res.status(500).json({ error: 'Invalid settings file format' });
     }
-  });
-  
-  return;
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      // Settings file doesn't exist yet
+      res.status(404).json({ error: 'No saved settings found' });
+    } else {
+      console.error('Error reading settings:', err);
+      res.status(500).json({ error: 'Failed to load settings' });
+    }
+  }
 });
 
 // Handle data status endpoint
@@ -183,7 +246,7 @@ server.get('/data-status', async (req, res) => {
   
   // Ensure the data directory exists
   try {
-    await fs.mkdir(dataDir, { recursive: true });
+    await fsPromises.mkdir(dataDir, { recursive: true });
   } catch (err) {
     if (err.code !== 'EEXIST') {
       console.error('Error creating data directory:', err);
@@ -193,7 +256,7 @@ server.get('/data-status', async (req, res) => {
   }
   
   // Read all files in the data directory
-  const files = await fs.readdir(dataDir);
+  const files = await fsPromises.readdir(dataDir);
   
   // Filter for JSON and CSV files
   const dataFiles = files.filter(file => file.endsWith('.json') || file.endsWith('.csv'));
@@ -232,7 +295,7 @@ server.get('/data-status', async (req, res) => {
       
       // Get file stats
       const filePath = path.join(dataDir, dataFile);
-      const fileStats = await fs.stat(filePath);
+      const fileStats = await fsPromises.stat(filePath);
       
       // Read data to get details
       let dataPoints = 0;
@@ -242,7 +305,7 @@ server.get('/data-status', async (req, res) => {
       
       if (dataFile.endsWith('.json') || dataFile.endsWith('.csv')) {
         // Read data file
-        const fileData = await fs.readFile(filePath, 'utf8');
+        const fileData = await fsPromises.readFile(filePath, 'utf8');
         const fileType = dataFile.endsWith('.json') ? 'json' : 'csv';
         
         // Parse the stock data using our common function
@@ -284,7 +347,7 @@ server.get('/data-status', async (req, res) => {
       
       if (metricsFile) {
         const metricsPath = path.join(dataDir, metricsFile);
-        const metricsData = await fs.readFile(metricsPath, 'utf8');
+        const metricsData = await fsPromises.readFile(metricsPath, 'utf8');
         const metrics = JSON.parse(metricsData);
         
         volatility = metrics.volatility;
@@ -479,6 +542,515 @@ server.get('/volatility-metrics', async (req, res) => {
   }
 });
 
+// Handle all portfolio calculations in a single endpoint
+server.post('/calculate-all-portfolio-values', async (req, res) => {
+  let body = '';
+  
+  req.on('data', chunk => {
+    body += chunk.toString();
+  });
+  
+  req.on('end', async () => {
+    try {
+      // Parse the JSON data
+      const requestData = JSON.parse(body);
+      const { symbols } = requestData;
+      
+      if (!symbols || !Array.isArray(symbols) || symbols.length === 0) {
+        res.status(400).json({ error: 'Symbols array is required' });
+        return;
+      }
+      
+      console.log(`Starting comprehensive portfolio calculation for ${symbols.length} symbols: ${symbols.join(', ')}`);
+      
+      try {
+        // Step 1: Load historical data for all symbols
+        const dataDir = path.join(__dirname, 'data');
+        console.log('Loading historical data from', dataDir);
+        
+        // This will contain the processed historical data
+        const historicalData = {};
+        const metricsData = {};
+        
+        // Process each symbol
+        for (const symbol of symbols) {
+          try {
+            // We'll calculate everything fresh, ignoring any existing metrics
+            console.log(`Processing data for ${symbol} to calculate fresh metrics`);
+            
+            // Clear any previously stored metrics data for this symbol
+            if (metricsData[symbol]) {
+              delete metricsData[symbol];
+            }
+            
+            // Try to load from CSV first
+            const csvPath = path.join(dataDir, `${symbol}.csv`);
+            try {
+              const csvData = await fsPromises.readFile(csvPath, 'utf8');
+              const lines = csvData.trim().split('\n');
+              if (lines.length > 1) {
+                const headers = lines[0].split(',');
+                const dateIndex = headers.findIndex(h => h === 'Date');
+                const closeIndex = headers.findIndex(h => h.includes('Close'));
+                
+                if (dateIndex !== -1 && closeIndex !== -1) {
+                  historicalData[symbol] = {
+                    prices: [],
+                    dates: []
+                  };
+                  
+                  // Process each line
+                  for (let i = 1; i < lines.length; i++) {
+                    const fields = lines[i].split(',');
+                    if (fields.length > Math.max(dateIndex, closeIndex)) {
+                      const price = parseFloat(fields[closeIndex]);
+                      if (!isNaN(price)) {
+                        historicalData[symbol].prices.push(price);
+                        historicalData[symbol].dates.push(fields[dateIndex]);
+                      }
+                    }
+                  }
+                  
+                  console.log(`Loaded ${historicalData[symbol].prices.length} data points for ${symbol} from CSV`);
+                } else {
+                  console.log(`CSV headers not found for ${symbol}`);
+                }
+              } else {
+                console.log(`Not enough data in CSV for ${symbol}`);
+              }
+            } catch (csvError) {
+              console.log(`Could not load CSV data for ${symbol}, trying JSON...`);
+              
+              // Try JSON next
+              try {
+                const jsonPath = path.join(dataDir, `${symbol}.json`);
+                const jsonData = await fsPromises.readFile(jsonPath, 'utf8');
+                const jsonObj = JSON.parse(jsonData);
+                
+                // Handle different JSON formats
+                if (Array.isArray(jsonObj)) {
+                  // Array of price objects
+                  historicalData[symbol] = {
+                    prices: [],
+                    dates: []
+                  };
+                  
+                  // Sort by date if needed
+                  if (jsonObj[0] && jsonObj[0].Date) {
+                    jsonObj.sort((a, b) => new Date(a.Date) - new Date(b.Date));
+                  }
+                  
+                  // Process data
+                  for (const item of jsonObj) {
+                    const price = item['Adj Close'] || item.Close;
+                    if (price !== undefined && item.Date) {
+                      historicalData[symbol].prices.push(parseFloat(price));
+                      historicalData[symbol].dates.push(item.Date);
+                    }
+                  }
+                } else if (jsonObj.prices && Array.isArray(jsonObj.prices)) {
+                  // Object with price array
+                  historicalData[symbol] = {
+                    prices: jsonObj.prices,
+                    dates: jsonObj.dates || []
+                  };
+                }
+                
+                console.log(`Loaded ${historicalData[symbol].prices.length} data points for ${symbol} from JSON`);
+              } catch (jsonError) {
+                console.error(`Could not load data for ${symbol}:`, jsonError.message);
+              }
+            }
+          } catch (error) {
+            console.error(`Error processing ${symbol}:`, error.message);
+          }
+        }
+        
+        // Check if we have any data
+        const symbolsWithData = Object.keys(historicalData);
+        if (symbolsWithData.length === 0) {
+          res.status(400).json({ 
+            error: 'No historical data found for any of the provided symbols', 
+            message: 'Make sure you have data files in the /data directory'
+          });
+          return;
+        }
+        
+        console.log(`Successfully loaded data for ${symbolsWithData.length} symbols`);
+        
+        // Step 2: Process the historical data to ensure chronological order
+        const processedData = {};
+        
+        for (const symbol of symbolsWithData) {
+          const prices = historicalData[symbol].prices;
+          const dates = historicalData[symbol].dates || [];
+          
+          // Make sure data is in chronological order (oldest to newest)
+          let pricesToUse = [...prices]; // Copy to avoid modifying original data
+          let datesToUse = [...dates];
+          
+          // Check if dates are available and if we need to sort the data
+          if (dates.length === prices.length && dates.length > 1) {
+            // Detect if data is in reverse chronological order (newest first)
+            const firstDate = new Date(dates[0]);
+            const lastDate = new Date(dates[dates.length - 1]);
+            
+            if (firstDate > lastDate) {
+              console.log(`Data for ${symbol} appears to be in reverse chronological order, sorting...`);
+              
+              // Create paired arrays and sort by date
+              let combined = [];
+              for (let i = 0; i < prices.length; i++) {
+                combined.push({ price: prices[i], date: new Date(dates[i]) });
+              }
+              
+              // Sort by date (oldest first)
+              combined.sort((a, b) => a.date - b.date);
+              
+              // Extract sorted arrays
+              pricesToUse = combined.map(item => item.price);
+              datesToUse = combined.map(item => item.date.toISOString().split('T')[0]);
+            }
+          }
+          
+          processedData[symbol] = {
+            prices: pricesToUse,
+            dates: datesToUse
+          };
+          
+          console.log(`Processed ${pricesToUse.length} price points for ${symbol}`);
+        }
+        
+        // Step 3: Use the analyzePortfolio utility to calculate everything in one go
+        console.log('Analyzing portfolio data...');
+        
+        // Get settings to use current risk-free rate
+        const { loadStockSettings } = require('./kelly_criterion');
+        const stockSettings = loadStockSettings();
+        
+        // Get risk-free rate from settings or use default
+        const riskFreeRate = stockSettings && stockSettings.riskFreeRate ? 
+            stockSettings.riskFreeRate / 100 : 0.045;
+          
+        // Use standard market return assumption
+        const marketReturn = 0.10; // 10% long-term average
+          
+        // Analyze the portfolio - this calculates returns, volatility, beta, and correlation
+        const portfolioAnalysis = analyzePortfolio(processedData, riskFreeRate, marketReturn);
+          
+        console.log(`Analysis complete for ${portfolioAnalysis.symbols.length} symbols`);
+          
+        // Extract results
+        const { volatility, expectedReturns, beta, correlationMatrix } = portfolioAnalysis;
+        const validSymbols = portfolioAnalysis.symbols;
+          
+        // Save metrics to file for future use
+        for (const symbol of validSymbols) {
+          try {
+            // Create metrics object
+            const metrics = {
+              symbol,
+              volatility: volatility[symbol],
+              expectedReturn: expectedReturns[symbol],
+              beta: beta[symbol],
+              dataPoints: processedData[symbol].prices.length,
+              lastCalculatedDate: new Date().toISOString()
+            };
+              
+            // Log for debugging
+            console.log(`Metrics for ${symbol}:`);
+            console.log(`- Volatility: ${(volatility[symbol] * 100).toFixed(2)}%`);
+            console.log(`- Expected Return: ${(expectedReturns[symbol] * 100).toFixed(2)}%`);
+            console.log(`- Beta: ${beta[symbol].toFixed(2)}`);
+              
+            // Save to file
+            const metricsPath = path.join(dataDir, `${symbol}_metrics.json`);
+            await fsPromises.writeFile(metricsPath, JSON.stringify(metrics, null, 2));
+            console.log(`Saved metrics for ${symbol}`);
+          } catch (saveError) {
+            console.error(`Error saving metrics for ${symbol}:`, saveError.message);
+          }
+        }
+        
+        // Step 4: Create settings object to return
+        const settingsData = {
+          riskFreeRate: riskFreeRate * 100, // Convert back to percentage
+          symbols: validSymbols,
+          correlationMatrix,
+          stocks: {}
+        };
+        
+        // Convert metrics to settings format (expected format for client)
+        for (const symbol of validSymbols) {
+          settingsData.stocks[symbol] = {
+            expectedReturn: Math.round(expectedReturns[symbol] * 100), // Convert to percentage
+            volatility: Math.round(volatility[symbol] * 100), // Convert to percentage
+            beta: Number(beta[symbol].toFixed(2)) // Add beta information
+          };
+        }
+        
+        // Step 5: Save comprehensive settings to stock_settings.json
+        try {
+          const settingsPath = path.join(__dirname, 'stock_settings.json');
+          
+          // Try to read existing settings to preserve any other fields
+          try {
+            const existingSettings = await fsPromises.readFile(settingsPath, 'utf8');
+            const parsedSettings = JSON.parse(existingSettings);
+            
+            // Preserve risk-free rate from existing settings
+            if (parsedSettings && parsedSettings.riskFreeRate) {
+              settingsData.riskFreeRate = parsedSettings.riskFreeRate;
+            }
+            
+            // Merge any existing stocks that aren't in our current calculation
+            if (parsedSettings && parsedSettings.stocks) {
+              for (const symbol in parsedSettings.stocks) {
+                if (!settingsData.stocks[symbol]) {
+                  settingsData.stocks[symbol] = parsedSettings.stocks[symbol];
+                }
+              }
+            }
+          } catch (readError) {
+            console.log('No existing settings file, creating new one');
+          }
+          
+          // Write updated settings
+          await fsPromises.writeFile(settingsPath, JSON.stringify(settingsData, null, 2));
+          console.log('Successfully saved comprehensive settings to stock_settings.json');
+        } catch (saveError) {
+          console.error('Error saving settings:', saveError);
+        }
+        
+        // Extract risk/return metrics for the response
+        const riskReturnMetrics = portfolioAnalysis.riskReturnMetrics || {};
+        
+        // Return results in a consistent format
+        res.status(200).json({
+          success: true,
+          message: `Successfully calculated portfolio values for ${validSymbols.length} stocks`,
+          symbols: validSymbols,
+          // Return both raw values (0-1 range) and percentage values (0-100 range)
+          volatility,
+          expectedReturns,
+          beta,
+          percentageVolatility: Object.fromEntries(validSymbols.map(s => [s, Math.round(volatility[s] * 100)])),
+          percentageExpectedReturns: Object.fromEntries(validSymbols.map(s => [s, Math.round(expectedReturns[s] * 100)])),
+          correlationMatrix,
+          riskReturnMetrics,
+          settingsData
+        });
+        
+      } catch (calculationError) {
+        console.error('Error calculating portfolio values:', calculationError);
+        res.status(500).json({ 
+          error: 'Failed to calculate portfolio values', 
+          message: calculationError.message,
+          stack: calculationError.stack
+        });
+      }
+    } catch (error) {
+      console.error('Error parsing request:', error);
+      res.status(400).json({ error: 'Invalid request data' });
+    }
+  });
+});
+
+// Handle advanced Kelly calculation endpoint
+server.post('/calculate-kelly', async (req, res) => {
+  let body = '';
+  
+  req.on('data', chunk => {
+    body += chunk.toString();
+  });
+  
+  req.on('end', async () => {
+    try {
+      // Parse the JSON data
+      const requestData = JSON.parse(body);
+      const { 
+        symbols, 
+        portfolioSize = 1000, 
+        returnAdjustments = {}
+      } = requestData;
+      
+      if (!symbols || !Array.isArray(symbols) || symbols.length === 0) {
+        res.status(400).json({ error: 'Symbols array is required' });
+        return;
+      }
+      
+      try {
+        // Use the kelly_criterion module's loadStockSettings function to get settings
+        const { loadStockSettings } = require('./kelly_criterion');
+        const settings = loadStockSettings();
+        
+        if (!settings || !settings.stocks) {
+          res.status(400).json({ 
+            error: 'Invalid stock settings', 
+            message: 'The stock_settings.json file does not contain valid data'
+          });
+          return;
+        }
+        
+        // Get risk-free rate from settings
+        const effectiveRiskFreeRate = settings.riskFreeRate / 100; // Convert from % to decimal
+        
+        // Prepare expected returns and volatility from settings
+        const expectedReturns = {};
+        const volatility = {};
+        
+        for (const symbol of symbols) {
+          if (!settings.stocks[symbol]) {
+            console.warn(`Symbol ${symbol} not found in stock settings, using defaults`);
+            expectedReturns[symbol] = getDefaultReturn(symbol);
+            volatility[symbol] = getDefaultVolatility(symbol);
+            continue;
+          }
+          
+          // Convert from percentage to decimal
+          expectedReturns[symbol] = settings.stocks[symbol].expectedReturn / 100;
+          volatility[symbol] = settings.stocks[symbol].volatility / 100;
+          
+          // Apply adjustments if specified
+          if (returnAdjustments[symbol]) {
+            expectedReturns[symbol] += returnAdjustments[symbol];
+          }
+        }
+        
+        // Get ordered symbols from settings if available
+        const orderedSymbols = settings.symbols || symbols;
+        
+        // Get correlation matrix from settings or create default
+        let correlationMatrix;
+        
+        if (settings.correlationMatrix) {
+          correlationMatrix = settings.correlationMatrix;
+          console.log('Using correlation matrix from settings');
+        } else {
+          // Create a default correlation matrix
+          console.log('Creating default correlation matrix');
+          correlationMatrix = [];
+          for (let i = 0; i < symbols.length; i++) {
+            correlationMatrix[i] = [];
+            for (let j = 0; j < symbols.length; j++) {
+              if (i === j) {
+                correlationMatrix[i][j] = 1; // Self-correlation is 1
+              } else {
+                correlationMatrix[i][j] = 0.5; // Default correlation between stocks
+              }
+            }
+          }
+        }
+        
+        // Filter to ensure we only use symbols that have data for all metrics
+        const completeSymbols = symbols.filter(symbol => 
+          expectedReturns[symbol] !== undefined && 
+          volatility[symbol] !== undefined &&
+          Number.isFinite(expectedReturns[symbol]) &&
+          Number.isFinite(volatility[symbol])
+        );
+        
+        // Check if we have enough data to calculate
+        if (completeSymbols.length === 0) {
+          res.status(400).json({
+            success: false,
+            error: 'No valid data available for calculation',
+            message: 'Could not find complete data for any of the requested symbols'
+          });
+          return;
+        }
+        
+        // Map order of correlation matrix to requested symbols
+        const adjustedMatrix = [];
+        const adjustedSymbols = completeSymbols;
+        
+        // Prepare correlation matrix based on ordered symbols from settings
+        if (settings.correlationMatrix && settings.symbols) {
+          // Check if all requested symbols are in settings
+          const allSymbolsInSettings = completeSymbols.every(symbol => 
+            settings.symbols.includes(symbol)
+          );
+          
+          if (allSymbolsInSettings) {
+            // Reorder correlation matrix to match requested symbols
+            for (let i = 0; i < completeSymbols.length; i++) {
+              adjustedMatrix[i] = [];
+              const symbolIndexI = settings.symbols.indexOf(completeSymbols[i]);
+              
+              for (let j = 0; j < completeSymbols.length; j++) {
+                const symbolIndexJ = settings.symbols.indexOf(completeSymbols[j]);
+                adjustedMatrix[i][j] = settings.correlationMatrix[symbolIndexI][symbolIndexJ];
+              }
+            }
+          } else {
+            // Fall back to default matrix if some symbols are missing
+            for (let i = 0; i < completeSymbols.length; i++) {
+              adjustedMatrix[i] = [];
+              for (let j = 0; j < completeSymbols.length; j++) {
+                if (i === j) {
+                  adjustedMatrix[i][j] = 1; // Self-correlation is 1
+                } else {
+                  adjustedMatrix[i][j] = 0.5; // Default correlation
+                }
+              }
+            }
+          }
+        } else {
+          // Use default matrix if no correlation data in settings
+          for (let i = 0; i < completeSymbols.length; i++) {
+            adjustedMatrix[i] = [];
+            for (let j = 0; j < completeSymbols.length; j++) {
+              if (i === j) {
+                adjustedMatrix[i][j] = 1; // Self-correlation is 1
+              } else {
+                adjustedMatrix[i][j] = 0.5; // Default correlation
+              }
+            }
+          }
+        }
+        
+        // Print inputs for debugging
+        console.log('Symbols with complete data:', completeSymbols);
+        console.log('Expected Returns:', expectedReturns);
+        console.log('Volatility:', volatility);
+        
+        // Calculate Kelly allocations with only the symbols that have complete data
+        // Use advanced Kelly calculation with precomputed values
+        const kellyAllocations = calculateAdvancedKelly(
+          completeSymbols,
+          expectedReturns,
+          volatility,
+          adjustedMatrix,
+          effectiveRiskFreeRate
+        );
+        
+        console.log('Kelly Allocations result:', kellyAllocations);
+        
+        // Return the results with all Kelly fractions
+        res.status(200).json({
+          success: true,
+          kellyAllocations,
+          ninetyPercentKelly: kellyAllocations.ninetyPercentKelly || {},
+          halfKelly: kellyAllocations.halfKelly || {},
+          quarterKelly: kellyAllocations.quarterKelly || {},
+          expectedReturns,
+          volatility,
+          correlationMatrix: adjustedMatrix
+        });
+      } catch (calculationError) {
+        console.error('Error calculating Kelly allocations:', calculationError);
+        res.status(500).json({ 
+          error: 'Failed to calculate Kelly allocations', 
+          message: calculationError.message
+        });
+      }
+    } catch (error) {
+      console.error('Error parsing request:', error);
+      res.status(400).json({ error: 'Invalid request data' });
+    }
+  });
+});
+
 // Handle list-stocks endpoint
 server.get('/list-stocks', (req, res) => {
   const dataDir = path.join(__dirname, 'data');
@@ -508,6 +1080,167 @@ server.get('/list-stocks', (req, res) => {
     // Return the list
     res.status(200).json({ stocks: uniqueSymbols });
   });
+});
+
+// Handle save-simulation endpoint
+server.post('/save-simulation', (req, res) => {
+  let body = '';
+  
+  req.on('data', chunk => {
+    body += chunk.toString();
+  });
+  
+  req.on('end', async () => {
+    try {
+      // Parse the JSON data
+      const simulationData = JSON.parse(body);
+      const { prefix = 'kelly' } = simulationData;
+      
+      // Create a timestamp for the filename
+      const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\./g, '-');
+      const filename = `${prefix}_${timestamp}.json`;
+      
+      // Ensure the simulations directory exists
+      const simulationsDir = path.join(__dirname, 'simulations');
+      try {
+        await fsPromises.mkdir(simulationsDir, { recursive: true });
+      } catch (err) {
+        if (err.code !== 'EEXIST') {
+          throw err;
+        }
+      }
+      
+      // Save the simulation data
+      const filePath = path.join(simulationsDir, filename);
+      await fsPromises.writeFile(filePath, JSON.stringify(simulationData, null, 2));
+      
+      res.status(200).json({ 
+        success: true, 
+        message: 'Simulation saved successfully',
+        filename,
+        filePath
+      });
+    } catch (error) {
+      console.error('Error saving simulation:', error);
+      res.status(500).json({ error: 'Failed to save simulation', details: error.message });
+    }
+  });
+});
+
+// Handle list-simulations endpoint
+server.get('/list-simulations', async (req, res) => {
+  try {
+    const simulationsDir = path.join(__dirname, 'simulations');
+    
+    // Ensure the simulations directory exists
+    try {
+      await fsPromises.mkdir(simulationsDir, { recursive: true });
+    } catch (err) {
+      if (err.code !== 'EEXIST') {
+        throw err;
+      }
+    }
+    
+    // Read all files in the simulations directory
+    const files = await fsPromises.readdir(simulationsDir);
+    
+    // Filter for JSON files
+    const simulationFiles = files.filter(file => file.endsWith('.json'));
+    
+    // Get file stats for each simulation file
+    const simulations = [];
+    for (const file of simulationFiles) {
+      const filePath = path.join(simulationsDir, file);
+      const stats = await fsPromises.stat(filePath);
+      
+      simulations.push({
+        filename: file,
+        created: stats.mtime.toISOString(),
+        size: stats.size
+      });
+    }
+    
+    // Sort by most recent first
+    simulations.sort((a, b) => new Date(b.created) - new Date(a.created));
+    
+    res.status(200).json({ simulations });
+  } catch (error) {
+    console.error('Error listing simulations:', error);
+    res.status(500).json({ error: 'Failed to list simulations', details: error.message });
+  }
+});
+
+// Handle load-simulation endpoint
+server.get('/load-simulation', async (req, res) => {
+  try {
+    const { filename } = req.query;
+    
+    if (!filename) {
+      return res.status(400).json({ error: 'Filename parameter is required' });
+    }
+    
+    // Validate filename to prevent directory traversal
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ error: 'Invalid filename' });
+    }
+    
+    const filePath = path.join(__dirname, 'simulations', filename);
+    
+    try {
+      // Check if file exists
+      await fsPromises.access(filePath);
+    } catch (err) {
+      return res.status(404).json({ error: 'Simulation file not found' });
+    }
+    
+    // Read and parse the simulation data
+    const data = await fsPromises.readFile(filePath, 'utf8');
+    const simulationData = JSON.parse(data);
+    
+    res.status(200).json({ 
+      success: true,
+      simulationData
+    });
+  } catch (error) {
+    console.error('Error loading simulation:', error);
+    res.status(500).json({ error: 'Failed to load simulation', details: error.message });
+  }
+});
+
+// Handle delete-simulation endpoint
+server.delete('/delete-simulation', async (req, res) => {
+  try {
+    const { filename } = req.query;
+    
+    if (!filename) {
+      return res.status(400).json({ error: 'Filename parameter is required' });
+    }
+    
+    // Validate filename to prevent directory traversal
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ error: 'Invalid filename' });
+    }
+    
+    const filePath = path.join(__dirname, 'simulations', filename);
+    
+    try {
+      // Check if file exists
+      await fsPromises.access(filePath);
+    } catch (err) {
+      return res.status(404).json({ error: 'Simulation file not found' });
+    }
+    
+    // Delete the file
+    await fsPromises.unlink(filePath);
+    
+    res.status(200).json({ 
+      success: true,
+      message: `Simulation ${filename} deleted successfully`
+    });
+  } catch (error) {
+    console.error('Error deleting simulation:', error);
+    res.status(500).json({ error: 'Failed to delete simulation', details: error.message });
+  }
 });
 
 // Handle static files
@@ -765,13 +1498,13 @@ async function readHistoricalDataFromJson(symbol) {
   try {
     // First try JSON file
     try {
-      const fileData = await fs.readFile(jsonFile, 'utf8');
+      const fileData = await fsPromises.readFile(jsonFile, 'utf8');
       const parsedInfo = parseStockData(fileData, 'json');
       
       // Get metrics if available
       let metrics = null;
       try {
-        const metricsData = await fs.readFile(metricsFile, 'utf8');
+        const metricsData = await fsPromises.readFile(metricsFile, 'utf8');
         metrics = JSON.parse(metricsData);
       } catch (metricsErr) {
         // No metrics file, that's okay
@@ -790,20 +1523,20 @@ async function readHistoricalDataFromJson(symbol) {
       };
     } catch (jsonErr) {
       // If JSON file doesn't exist, try CSV
-      const fileData = await fs.readFile(csvFile, 'utf8');
+      const fileData = await fsPromises.readFile(csvFile, 'utf8');
       const parsedInfo = parseStockData(fileData, 'csv');
       
       // Get metrics if available
       let metrics = null;
       try {
-        const metricsData = await fs.readFile(metricsFile, 'utf8');
+        const metricsData = await fsPromises.readFile(metricsFile, 'utf8');
         metrics = JSON.parse(metricsData);
       } catch (metricsErr) {
         // No metrics file, that's okay
       }
       
       return {
-        data: null, // We don't parse CSV into a structured object currently
+        data: parsedInfo.data, // Return parsed data from CSV
         summary: {
           symbol,
           dataPoints: parsedInfo.dataPoints,
@@ -828,7 +1561,7 @@ async function calculateAllVolatilityMetricsCustom() {
     const dataDir = DATA_DIR;
     
     // Read all files in data directory
-    const files = await fs.readdir(dataDir);
+    const files = await fsPromises.readdir(dataDir);
     
     // Filter for JSON and CSV files that aren't metrics files
     const dataFiles = files.filter(file => 
@@ -983,7 +1716,7 @@ async function calculateAllVolatilityMetricsCustom() {
         
         // Save metrics
         const metricsFile = path.join(dataDir, `${symbol}_metrics.json`);
-        await fs.writeFile(metricsFile, JSON.stringify(metrics, null, 2));
+        await fsPromises.writeFile(metricsFile, JSON.stringify(metrics, null, 2));
         
         // Add to results
         results.metrics[symbol] = metrics;
@@ -1022,7 +1755,7 @@ async function calculateAllVolatilityMetricsCustom() {
       
       // Try to read existing settings
       try {
-        const settingsData = await fs.readFile(settingsPath, 'utf8');
+        const settingsData = await fsPromises.readFile(settingsPath, 'utf8');
         settings = JSON.parse(settingsData);
       } catch (readErr) {
         // No settings file, that's okay
@@ -1039,7 +1772,7 @@ async function calculateAllVolatilityMetricsCustom() {
       }
       
       // Save updated settings
-      await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
+      await fsPromises.writeFile(settingsPath, JSON.stringify(settings, null, 2));
     } catch (settingsErr) {
       console.error('Error updating settings:', settingsErr);
     }
@@ -1051,34 +1784,52 @@ async function calculateAllVolatilityMetricsCustom() {
 }
 
 /**
- * Gets default volatility for a symbol
+ * Gets volatility for a symbol from stock settings in stock_settings.json
  * @param {string} symbol - Stock symbol
- * @returns {number} - Default volatility as decimal (not percentage)
+ * @returns {number} - Volatility as decimal (not percentage)
+ * @throws {Error} - Throws error if value can't be retrieved
  */
 function getDefaultVolatility(symbol) {
-  switch(symbol.toUpperCase()) {
-    case 'TSLA': return 0.55;
-    case 'NVDA': return 0.45;
-    case 'CPNG': return 0.50;
-    case 'SHOP': return 0.50;
-    case 'MELI': return 0.45;
-    default: return 0.40;  // Default for unknown stocks
+  // Get value from stock settings
+  try {
+    const { loadStockSettings } = require('./kelly_criterion');
+    const settings = loadStockSettings();
+    
+    if (settings && settings.stocks && settings.stocks[symbol] && 
+        typeof settings.stocks[symbol].volatility === 'number') {
+      // Convert from percentage to decimal
+      return settings.stocks[symbol].volatility / 100;
+    }
+    
+    throw new Error(`No volatility data found for ${symbol} in stock settings`);
+  } catch (error) {
+    console.error(`Failed to get volatility for ${symbol}:`, error.message);
+    throw new Error(`Cannot determine volatility for ${symbol}: ${error.message}`);
   }
 }
 
 /**
- * Gets default expected return for a symbol
+ * Gets expected return for a symbol from stock settings in stock_settings.json
  * @param {string} symbol - Stock symbol
- * @returns {number} - Default expected return as decimal (not percentage)
+ * @returns {number} - Expected return as decimal (not percentage)
+ * @throws {Error} - Throws error if value can't be retrieved
  */
 function getDefaultReturn(symbol) {
-  switch(symbol.toUpperCase()) {
-    case 'TSLA': return 0.35;
-    case 'NVDA': return 0.40;
-    case 'CPNG': return 0.20;
-    case 'SHOP': return 0.25;
-    case 'MELI': return 0.30;
-    default: return 0.15;  // Default for unknown stocks
+  // Get value from stock settings
+  try {
+    const { loadStockSettings } = require('./kelly_criterion');
+    const settings = loadStockSettings();
+    
+    if (settings && settings.stocks && settings.stocks[symbol] && 
+        typeof settings.stocks[symbol].expectedReturn === 'number') {
+      // Convert from percentage to decimal
+      return settings.stocks[symbol].expectedReturn / 100;
+    }
+    
+    throw new Error(`No expected return data found for ${symbol} in stock settings`);
+  } catch (error) {
+    console.error(`Failed to get expected return for ${symbol}:`, error.message);
+    throw new Error(`Cannot determine expected return for ${symbol}: ${error.message}`);
   }
 }
 

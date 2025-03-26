@@ -87,6 +87,7 @@
                                 <label for="kellyFraction" class="form-label">Kelly Fraction:</label>
                                 <select class="form-select" id="kellyFraction" style="min-width: 100px; max-width: 250px;">
                                     <option value="1">Full Kelly (100%)</option>
+                                    <option value="0.9">90% Kelly</option>
                                     <option value="0.75">Three-Quarter Kelly (75%)</option>
                                     <option value="0.5" selected>Half Kelly (50%)</option>
                                     <option value="0.25">Quarter Kelly (25%)</option>
@@ -204,6 +205,8 @@
                             <label for="simulationYears" class="form-label small pt-1">Years</label>
                             <button id="runSimulationButton" class="btn btn-sm btn-primary">Run</button>
                             <button id="resetSimulationButton" class="btn btn-sm btn-outline-secondary">Reset</button>
+                            <button id="saveSimulationButton" class="btn btn-sm btn-success">Save</button>
+                            <button id="loadSimulationButton" class="btn btn-sm btn-info">Load</button>
                         </div>
                     </div>
                     <div class="card-body">
@@ -236,8 +239,69 @@
         </div>
     </div>
 
+    <!-- Save Simulation Prefix Modal -->
+    <div class="modal fade" id="savePrefixModal" tabindex="-1" aria-labelledby="savePrefixModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="savePrefixModalLabel">Save Simulation</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="simulationPrefix" class="form-label">Prefix for filename</label>
+                        <input type="text" class="form-control" id="simulationPrefix" value="kelly" placeholder="Enter a prefix for the simulation file">
+                    </div>
+                    <p class="text-muted small">The file will be saved with this prefix followed by the current date and time.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-success" id="confirmSaveButton">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Load Simulation Modal -->
+    <div class="modal fade" id="loadSimulationModal" tabindex="-1" aria-labelledby="loadSimulationModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="loadSimulationModalLabel">Load Saved Simulation</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <div class="table-responsive">
+                            <table class="table table-hover" id="savedSimulationsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Filename</th>
+                                        <th>Date</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <!-- Will be filled dynamically -->
+                                </tbody>
+                            </table>
+                        </div>
+                        <div id="noSimulationsMessage" class="alert alert-info d-none">
+                            No saved simulations found.
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Bootstrap Bundle with Popper -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Application Scripts -->
     <script src="web_visualization.js"></script>
 </body>
 </html>
