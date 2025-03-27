@@ -4,31 +4,61 @@
  * This script implements the Kelly Criterion for portfolio allocation,
  * providing multiple variations (Full Kelly, Half Kelly, Quarter Kelly)
  * for different risk profiles.
+ * 
+ * The expected returns, volatility, and correlation matrix are loaded from
+ * the stock_settings.json file, which contains pre-calculated values based on
+ * historical data.
  */
 
-// Define stocks and their characteristics
-const stocks = ['TSLA', 'NVDA', 'CPNG', 'SHOP', 'MELI'];
+// Node.js version - uses file system operations
 
-// Expected annual returns (these are examples and not actual predictions)
-const expectedReturns = {
-  'TSLA': 0.15, // 15% expected annual return
-  'NVDA': 0.25, // 25% expected annual return
-  'CPNG': 0.12, // 12% expected annual return
-  'SHOP': 0.18, // 18% expected annual return
-  'MELI': 0.20  // 20% expected annual return
-};
+const fs = require('fs');
+const path = require('path');
 
-// Volatility (standard deviation of returns)
-const volatility = {
-  'TSLA': 0.55, // 55% annual volatility
-  'NVDA': 0.45, // 45% annual volatility
-  'CPNG': 0.40, // 40% annual volatility
-  'SHOP': 0.50, // 50% annual volatility
-  'MELI': 0.45  // 45% annual volatility
-};
+// Load stock settings from file
+function loadStockSettings() {
+  try {
+    const settingsPath = path.join(__dirname, 'stock_settings.json');
+    const settingsData = fs.readFileSync(settingsPath, 'utf8');
+    return JSON.parse(settingsData);
+  } catch (error) {
+    console.error('Error loading stock settings:', error);
+    // Return default values if settings file doesn't exist or is invalid
+    return {
+      stocks: {
+        'TSLA': { expectedReturn: 35, volatility: 55 },
+        'NVDA': { expectedReturn: 40, volatility: 45 },
+        'CPNG': { expectedReturn: 20, volatility: 50 },
+        'SHOP': { expectedReturn: 25, volatility: 50 },
+        'MELI': { expectedReturn: 30, volatility: 45 }
+      },
+      riskFreeRate: 4.5,
+      correlationMatrix: null,
+      symbols: null
+    };
+  }
+}
 
-// Risk-free rate (approximate current Treasury yield)
-const riskFreeRate = 0.045; // 4.5%
+// Load settings
+const settings = loadStockSettings();
+
+// Extract stocks and their characteristics from settings
+const stocks = Object.keys(settings.stocks);
+
+// Convert percentage values to decimals for calculations
+const expectedReturns = {};
+const volatility = {};
+
+for (const symbol of stocks) {
+  expectedReturns[symbol] = settings.stocks[symbol].expectedReturn / 100;
+  volatility[symbol] = settings.stocks[symbol].volatility / 100;
+}
+
+// Load correlation matrix if available
+const correlationMatrix = settings.correlationMatrix;
+
+// Risk-free rate from settings (convert from percentage to decimal)
+const riskFreeRate = settings.riskFreeRate / 100;
 
 // Portfolio size
 const portfolioSize = 1000; // $1000 total investment
@@ -39,24 +69,96 @@ const portfolioSize = 1000; // $1000 total investment
  * @param {Object} volatility - Map of asset symbols to volatility values
  * @param {Number} riskFreeRate - The risk-free rate
  * @param {Number} portfolioSize - Total investment amount
+ * @param {Array} correlationMatrix - Optional correlation matrix for assets
  * @returns {Object} - Allocation details
  */
-function calculateKellyAllocation(expectedReturns, volatility, riskFreeRate, portfolioSize) {
+function calculateKellyAllocation(expectedReturns, volatility, riskFreeRate, portfolioSize, correlationMatrix = null) {
   const symbols = Object.keys(expectedReturns);
-  const kellyFractions = {};
+  let kellyFractions = {};
   const allocations = {};
   
-  // Calculate Kelly fraction for each asset
-  for (const symbol of symbols) {
-    const excessReturn = expectedReturns[symbol] - riskFreeRate;
-    const kellyFraction = excessReturn / (volatility[symbol] * volatility[symbol]);
-    kellyFractions[symbol] = kellyFraction;
+  // Check if we have a valid correlation matrix and ordered symbols
+  const hasCorrelation = correlationMatrix && settings.symbols && 
+                        correlationMatrix.length === settings.symbols.length && 
+                        settings.symbols.length === symbols.length;
+  
+  if (hasCorrelation) {
+    // Advanced Kelly calculation using correlation matrix
+    try {
+      // Load math.js for matrix operations
+      const math = require('mathjs');
+      
+      // Create covariance matrix
+      const covarianceMatrix = math.zeros(symbols.length, symbols.length);
+      
+      for (let i = 0; i < symbols.length; i++) {
+        for (let j = 0; j < symbols.length; j++) {
+          const sigmaI = volatility[symbols[i]];
+          const sigmaJ = volatility[symbols[j]];
+          const rhoIJ = correlationMatrix[i][j];
+          covarianceMatrix.set([i, j], sigmaI * sigmaJ * rhoIJ);
+        }
+      }
+      
+      // Excess returns vector (expected return - risk-free rate)
+      const excessReturns = symbols.map(symbol => expectedReturns[symbol] - riskFreeRate);
+      
+      // Calculate inverse of covariance matrix
+      const covarianceMatrixInverse = math.inv(covarianceMatrix);
+      
+      // Calculate Kelly allocation (w = Σ^-1 * μ)
+      const kellyWeights = math.multiply(covarianceMatrixInverse, excessReturns);
+      
+      // Sum of weights (for normalization)
+      const sumWeights = math.sum(kellyWeights);
+      
+      // Normalize to 100% allocation
+      const normalizedWeights = math.divide(kellyWeights, sumWeights).toArray();
+      
+      // Create kellyFractions object from normalized weights
+      for (let i = 0; i < symbols.length; i++) {
+        kellyFractions[symbols[i]] = normalizedWeights[i];
+      }
+      
+      console.log('Using advanced Kelly calculation with correlation matrix');
+    } catch (error) {
+      console.error('Error in advanced Kelly calculation:', error);
+      console.log('Falling back to simplified Kelly calculation');
+      // Fall back to simplified calculation if advanced fails
+      for (const symbol of symbols) {
+        const excessReturn = expectedReturns[symbol] - riskFreeRate;
+        const kellyFraction = excessReturn / (volatility[symbol] * volatility[symbol]);
+        kellyFractions[symbol] = kellyFraction;
+      }
+      
+      // Sum of all Kelly fractions (for normalization)
+      const totalKelly = Object.values(kellyFractions).reduce((sum, val) => sum + val, 0);
+      
+      // Normalize fractions
+      for (const symbol of symbols) {
+        kellyFractions[symbol] = kellyFractions[symbol] / totalKelly;
+      }
+    }
+  } else {
+    // Simplified Kelly calculation (no correlation)
+    for (const symbol of symbols) {
+      const excessReturn = expectedReturns[symbol] - riskFreeRate;
+      const kellyFraction = excessReturn / (volatility[symbol] * volatility[symbol]);
+      kellyFractions[symbol] = kellyFraction;
+    }
+    
+    // Sum of all Kelly fractions (for normalization)
+    const totalKelly = Object.values(kellyFractions).reduce((sum, val) => sum + val, 0);
+    
+    // Normalize fractions
+    for (const symbol of symbols) {
+      kellyFractions[symbol] = kellyFractions[symbol] / totalKelly;
+    }
+    
+    console.log('Using simplified Kelly calculation (no correlation matrix)');
   }
   
-  // Sum of all Kelly fractions (for normalization)
-  const totalKelly = Object.values(kellyFractions).reduce((sum, val) => sum + val, 0);
-  
-  // Calculate normalized allocations
+  // Calculate allocations using the determined Kelly fractions
   const result = {
     fullKelly: {},
     threeQuarterKelly: {},
@@ -64,6 +166,9 @@ function calculateKellyAllocation(expectedReturns, volatility, riskFreeRate, por
     quarterKelly: {},
     rawKellyFractions: {...kellyFractions}
   };
+  
+  // Make sure totalKelly is defined for allocation calculations
+  const totalKelly = Object.values(kellyFractions).reduce((sum, val) => sum + val, 0);
   
   // Calculate allocations for each asset
   for (const symbol of symbols) {
@@ -166,11 +271,12 @@ function printAllocations(allocations) {
 }
 
 // Calculate and display allocations
-const allocations = calculateKellyAllocation(expectedReturns, volatility, riskFreeRate, portfolioSize);
+const allocations = calculateKellyAllocation(expectedReturns, volatility, riskFreeRate, portfolioSize, correlationMatrix);
 printAllocations(allocations);
 
-// Export functions for reuse
+// Expose functions in the global scope for browser use
 module.exports = {
   calculateKellyAllocation,
-  printAllocations
+  printAllocations,
+  loadStockSettings
 };

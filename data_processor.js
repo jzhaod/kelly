@@ -5,7 +5,11 @@
  * while maintaining a consistent data structure for display and analysis.
  */
 
-const { parse } = require('csv-parse');
+// Import csv-parse with proper handling for sync/async
+// Using different approach for newer csv-parse versions (5.x+)
+const { parse } = require('csv-parse/sync');
+// Fallback for callback API if needed
+const csvParseAsync = require('csv-parse');
 
 // Base class for data processing
 class BaseDataProcessor {
@@ -108,17 +112,53 @@ class CsvDataProcessor extends BaseDataProcessor {
   async processData(csvContent) {
     try {
       console.log('Starting CSV data processing');
-      // Parse CSV content using csv-parse
-      const records = await new Promise((resolve, reject) => {
-        parse(csvContent, {
+      
+      // Verify that csvContent is a string
+      if (typeof csvContent !== 'string') {
+        console.error(`Error: Expected csvContent to be a string, got ${typeof csvContent}`);
+        this.data = [];
+        return this.getProcessedData();
+      }
+      
+      // Basic validation of CSV content
+      if (!csvContent || csvContent.trim() === '') {
+        console.error('Error: Empty CSV content');
+        this.data = [];
+        return this.getProcessedData();
+      }
+      
+      // Parse CSV content using csv-parse sync for simplicity
+      let records;
+      try {
+        console.log('Using synchronous CSV parsing');
+        // parse from csv-parse/sync is synchronous
+        records = parse(csvContent, {
           columns: true, // Use first row as headers
           skip_empty_lines: true,
           trim: true
-        }, (err, records) => {
-          if (err) reject(err);
-          else resolve(records);
         });
-      });
+        console.log(`Successfully parsed ${records.length} CSV records synchronously`);
+      } catch (parseError) {
+        console.error('CSV Parse error:', parseError);
+        // Attempt fallback to async parse if sync fails
+        try {
+          console.log('Falling back to async parsing');
+          records = await new Promise((resolve, reject) => {
+            csvParseAsync(csvContent, {
+              columns: true,
+              skip_empty_lines: true,
+              trim: true
+            }, (err, result) => {
+              if (err) reject(err);
+              else resolve(result);
+            });
+          });
+          console.log(`Successfully parsed ${records.length} CSV records asynchronously`);
+        } catch (asyncError) {
+          console.error('Async CSV Parse error:', asyncError);
+          throw parseError; // Throw the original error
+        }
+      }
 
       if (!records || records.length === 0) {
         console.log("No valid data found in CSV");
