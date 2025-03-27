@@ -81,7 +81,7 @@ server.get('/data-availability', async (req, res) => {
       // Try to read JSON data first
       const jsonPath = path.join(__dirname, 'data', `${symbol}.json`);
       console.log(`Attempting to read JSON data from: ${jsonPath}`);
-      const jsonData = await fs.readFile(jsonPath, 'utf8');
+      const jsonData = await fsPromises.readFile(jsonPath, 'utf8');
       data = JSON.parse(jsonData);
       processor = createDataProcessor('json');
       processor.symbol = symbol;
@@ -92,7 +92,7 @@ server.get('/data-availability', async (req, res) => {
         // Fall back to CSV data
         const csvPath = path.join(__dirname, 'data', `${symbol}.csv`);
         console.log(`Attempting to read CSV data from: ${csvPath}`);
-        const csvContent = await fs.readFile(csvPath, 'utf8');
+        const csvContent = await fsPromises.readFile(csvPath, 'utf8');
         processor = createDataProcessor('csv');
         processor.symbol = symbol;
         data = csvContent;
@@ -107,7 +107,7 @@ server.get('/data-availability', async (req, res) => {
       // Try to read metrics data if available
       const metricsPath = path.join(__dirname, 'data', `${symbol}_metrics.json`);
       console.log(`Attempting to read metrics data from: ${metricsPath}`);
-      const metricsData = await fs.readFile(metricsPath, 'utf8');
+      const metricsData = await fsPromises.readFile(metricsPath, 'utf8');
       metrics = JSON.parse(metricsData);
       console.log('Successfully loaded metrics data');
     } catch (metricsError) {
