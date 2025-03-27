@@ -248,7 +248,18 @@ function calculateSimplifiedKelly(symbols, expectedReturns, volatility, riskFree
  * @param {Number} lookbackPeriod - Number of days to look back
  * @returns {Object} - Historical price data
  */
-async function fetchHistoricalData(symbols, lookbackPeriod = 252) {
+async function fetchHistoricalData(symbols, lookbackPeriod = null) {
+  // Load settings to get annualizationFactor if lookbackPeriod is not provided
+  if (lookbackPeriod === null) {
+    try {
+      const { getFinancialParameters } = require('./settings_loader');
+      const { annualizationFactor } = getFinancialParameters();
+      lookbackPeriod = annualizationFactor;
+    } catch (error) {
+      console.error('Could not load parameters from settings_loader:', error.message);
+      throw new Error(`Failed to get required parameters: ${error.message}`);
+    }
+  }
   console.log(`Fetching historical data for ${symbols.join(', ')} for the past ${lookbackPeriod} trading days...`);
   
   // Import the data processor
@@ -395,13 +406,22 @@ async function runAdvancedKellyAllocation(symbols, portfolioSize = 1000, returnA
     // Fetch historical data
     const historicalData = await fetchHistoricalData(symbols);
     
-    // Import utility functions
+    // Import utility functions and settings loader
     const { 
       calculateDailyReturns, 
       calculateVolatility, 
       calculateCorrelationMatrix,
       calculateExpectedReturnCAPM
     } = require('./utils');
+    const { getFinancialParameters } = require('./settings_loader');
+    
+    // Get calculation parameters from settings
+    const { 
+      annualizationFactor, 
+      riskFreeRate, 
+      marketReturn, 
+      marketVolatility 
+    } = getFinancialParameters();
     
     // Process returns data
     const returns = {};
@@ -415,7 +435,7 @@ async function runAdvancedKellyAllocation(symbols, portfolioSize = 1000, returnA
         
         // Calculate volatility for each symbol
         if (returns[symbol] && returns[symbol].length > 1) {
-          volatility[symbol] = calculateVolatility(returns[symbol], 252);
+          volatility[symbol] = calculateVolatility(returns[symbol], annualizationFactor);
         }
       }
     }
@@ -423,11 +443,6 @@ async function runAdvancedKellyAllocation(symbols, portfolioSize = 1000, returnA
     // Calculate correlation matrix
     const correlationResult = calculateCorrelationMatrix(returns);
     const correlationMatrix = correlationResult.correlationMatrix;
-    
-    // Risk-free rate and market return for CAPM
-    const riskFreeRate = 0.045; // 4.5%
-    const marketReturn = 0.10;  // 10%
-    const marketVolatility = 0.20; // Market volatility estimate
     
     // Calculate expected returns with CAPM model and adjustments
     const expectedReturns = {};

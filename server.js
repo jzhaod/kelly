@@ -170,8 +170,39 @@ server.post('/save-settings', (req, res) => {
           console.log('No existing settings file to back up');
         }
         
-        // Step 3: Write new settings to a temporary file first
-        await fsPromises.writeFile(tempSettingsFile, JSON.stringify(settingsData, null, 2));
+        // Step 3: Read current settings to preserve financial parameters
+        let existingSettings = {};
+        try {
+          const currentSettingsData = await fsPromises.readFile(SETTINGS_FILE, 'utf8');
+          existingSettings = JSON.parse(currentSettingsData);
+          console.log('Successfully read existing settings for merging');
+        } catch (readErr) {
+          console.log('No existing settings to merge with:', readErr.message);
+        }
+        
+        // Preserve critical financial parameters if they exist in the current settings
+        // but are not included in the incoming settings data
+        const preservedSettings = { ...settingsData };
+        
+        // Preserve these parameters only if they exist in current settings but not in new data
+        const parametersToPreserve = ['marketReturn', 'marketVolatility', 'annualizationFactor', 'volatilityPeriod'];
+        
+        console.log('Checking for financial parameters to preserve...');
+        for (const param of parametersToPreserve) {
+          if (existingSettings[param] !== undefined) {
+            if (preservedSettings[param] === undefined) {
+              console.log(`Preserving existing ${param}: ${existingSettings[param]}`);
+              preservedSettings[param] = existingSettings[param];
+            } else {
+              console.log(`Parameter ${param} already exists in new settings: ${preservedSettings[param]}`);
+            }
+          } else {
+            console.log(`Warning: Parameter ${param} not found in existing settings`);
+          }
+        }
+        
+        // Write the merged settings to a temporary file
+        await fsPromises.writeFile(tempSettingsFile, JSON.stringify(preservedSettings, null, 2));
         console.log(`Created temporary settings at ${tempSettingsFile}`);
         
         // Step 4: Rename the temporary file to the real settings file
@@ -515,6 +546,10 @@ server.post('/fill-data-gaps', async (req, res) => {
 // Handle calculate volatility endpoint
 server.post('/calculate-volatility', async (req, res) => {
   try {
+    // Ensure parameters exist before calculation
+    const { ensureRequiredParameters } = require('./settings_loader');
+    await ensureRequiredParameters();
+    
     const result = await calculateAllVolatilityMetricsCustom();
     res.status(200).json(result);
   } catch (error) {
@@ -555,6 +590,15 @@ server.post('/calculate-all-portfolio-values', async (req, res) => {
       if (!symbols || !Array.isArray(symbols) || symbols.length === 0) {
         res.status(400).json({ error: 'Symbols array is required' });
         return;
+      }
+      
+      // Ensure parameters exist before calculation
+      try {
+        const { ensureRequiredParameters } = require('./settings_loader');
+        await ensureRequiredParameters();
+        console.log('Required parameters verified for portfolio calculation');
+      } catch (paramError) {
+        console.error('Error ensuring required parameters:', paramError.message);
       }
       
       console.log(`Starting comprehensive portfolio calculation for ${symbols.length} symbols: ${symbols.join(', ')}`);
@@ -720,19 +764,12 @@ server.post('/calculate-all-portfolio-values', async (req, res) => {
         // Step 3: Use the analyzePortfolio utility to calculate everything in one go
         console.log('Analyzing portfolio data...');
         
-        // Get settings to use current risk-free rate
-        const { loadStockSettings } = require('./kelly_criterion');
-        const stockSettings = loadStockSettings();
+        // Use settings_loader for financial parameters
+        const { getFinancialParameters } = require('./settings_loader');
         
-        // Get risk-free rate from settings or use default
-        const riskFreeRate = stockSettings && stockSettings.riskFreeRate ? 
-            stockSettings.riskFreeRate / 100 : 0.045;
-          
-        // Use standard market return assumption
-        const marketReturn = 0.10; // 10% long-term average
-          
-        // Analyze the portfolio - this calculates returns, volatility, beta, and correlation
-        const portfolioAnalysis = analyzePortfolio(processedData, riskFreeRate, marketReturn);
+        // Analyze the portfolio - this will use settings_loader internally
+        // to get all required financial parameters
+        const portfolioAnalysis = analyzePortfolio(processedData);
           
         console.log(`Analysis complete for ${portfolioAnalysis.symbols.length} symbols`);
           
@@ -769,6 +806,7 @@ server.post('/calculate-all-portfolio-values', async (req, res) => {
         }
         
         // Step 4: Create settings object to return
+        const { riskFreeRate } = getFinancialParameters();
         const settingsData = {
           riskFreeRate: riskFreeRate * 100, // Convert back to percentage
           symbols: validSymbols,
@@ -794,9 +832,22 @@ server.post('/calculate-all-portfolio-values', async (req, res) => {
             const existingSettings = await fsPromises.readFile(settingsPath, 'utf8');
             const parsedSettings = JSON.parse(existingSettings);
             
-            // Preserve risk-free rate from existing settings
-            if (parsedSettings && parsedSettings.riskFreeRate) {
-              settingsData.riskFreeRate = parsedSettings.riskFreeRate;
+            // Preserve important financial parameters from existing settings
+            const parametersToPreserve = [
+              'riskFreeRate', 
+              'marketReturn', 
+              'marketVolatility', 
+              'annualizationFactor', 
+              'volatilityPeriod'
+            ];
+            
+            for (const param of parametersToPreserve) {
+              if (parsedSettings && parsedSettings[param] !== undefined) {
+                console.log(`Preserving ${param} from existing settings: ${parsedSettings[param]}`);
+                settingsData[param] = parsedSettings[param];
+              } else {
+                console.log(`Warning: ${param} not found in existing settings`);
+              }
             }
             
             // Merge any existing stocks that aren't in our current calculation
@@ -809,6 +860,14 @@ server.post('/calculate-all-portfolio-values', async (req, res) => {
             }
           } catch (readError) {
             console.log('No existing settings file, creating new one');
+            
+            // Make sure required parameters exist in new settings file
+            if (!settingsData.marketReturn) settingsData.marketReturn = 10;
+            if (!settingsData.marketVolatility) settingsData.marketVolatility = 20;
+            if (!settingsData.annualizationFactor) settingsData.annualizationFactor = 252;
+            if (!settingsData.volatilityPeriod) settingsData.volatilityPeriod = 150;
+            
+            console.log('Added default financial parameters to new settings file');
           }
           
           // Write updated settings
@@ -839,11 +898,22 @@ server.post('/calculate-all-portfolio-values', async (req, res) => {
         
       } catch (calculationError) {
         console.error('Error calculating portfolio values:', calculationError);
-        res.status(500).json({ 
-          error: 'Failed to calculate portfolio values', 
-          message: calculationError.message,
-          stack: calculationError.stack
-        });
+        
+        // Check for specific error types
+        if (calculationError.message.includes('Missing required parameter')) {
+          // This is a settings parameter issue
+          res.status(400).json({ 
+            error: 'Missing required settings', 
+            message: `${calculationError.message}. Please update your stock_settings.json file to include all required financial parameters: riskFreeRate, marketReturn, marketVolatility, and annualizationFactor.`
+          });
+        } else {
+          // Generic calculation error
+          res.status(500).json({ 
+            error: 'Failed to calculate portfolio values', 
+            message: calculationError.message,
+            stack: calculationError.stack
+          });
+        }
       }
     } catch (error) {
       console.error('Error parsing request:', error);
@@ -875,9 +945,21 @@ server.post('/calculate-kelly', async (req, res) => {
         return;
       }
       
+      // Ensure parameters exist before calculation
       try {
-        // Use the kelly_criterion module's loadStockSettings function to get settings
+        const { ensureRequiredParameters } = require('./settings_loader');
+        await ensureRequiredParameters();
+        console.log('Required parameters verified for Kelly calculation');
+      } catch (paramError) {
+        console.error('Error ensuring required parameters:', paramError.message);
+      }
+      
+      try {
+        // Use settings_loader for financial parameters
+        const { getFinancialParameters } = require('./settings_loader');
         const { loadStockSettings } = require('./kelly_criterion');
+        
+        // Get the stock settings for stock-specific data
         const settings = loadStockSettings();
         
         if (!settings || !settings.stocks) {
@@ -888,8 +970,8 @@ server.post('/calculate-kelly', async (req, res) => {
           return;
         }
         
-        // Get risk-free rate from settings
-        const effectiveRiskFreeRate = settings.riskFreeRate / 100; // Convert from % to decimal
+        // Get financial parameters from settings_loader
+        const { riskFreeRate: effectiveRiskFreeRate } = getFinancialParameters();
         
         // Prepare expected returns and volatility from settings
         const expectedReturns = {};
@@ -955,6 +1037,9 @@ server.post('/calculate-kelly', async (req, res) => {
           });
           return;
         }
+        
+        // Get market volatility from settings_loader
+        const { marketVolatility } = getFinancialParameters();
         
         // Map order of correlation matrix to requested symbols
         const adjustedMatrix = [];
@@ -1035,10 +1120,21 @@ server.post('/calculate-kelly', async (req, res) => {
         });
       } catch (calculationError) {
         console.error('Error calculating Kelly allocations:', calculationError);
-        res.status(500).json({ 
-          error: 'Failed to calculate Kelly allocations', 
-          message: calculationError.message
-        });
+        
+        // Check for specific error types
+        if (calculationError.message.includes('Missing required parameter')) {
+          // This is a settings parameter issue
+          res.status(400).json({ 
+            error: 'Missing required settings', 
+            message: `${calculationError.message}. Please update your stock_settings.json file to include all required financial parameters: riskFreeRate, marketReturn, marketVolatility, and annualizationFactor.`
+          });
+        } else {
+          // Generic calculation error
+          res.status(500).json({ 
+            error: 'Failed to calculate Kelly allocations', 
+            message: calculationError.message
+          });
+        }
       }
     } catch (error) {
       console.error('Error parsing request:', error);
@@ -1554,6 +1650,18 @@ async function readHistoricalDataFromJson(symbol) {
  */
 async function calculateAllVolatilityMetricsCustom() {
   try {
+    console.log('Starting calculateAllVolatilityMetricsCustom...');
+    
+    // Log current settings to diagnose issues
+    try {
+      const { getFinancialParameters } = require('./settings_loader');
+      const params = getFinancialParameters();
+      console.log('Current financial parameters from settings:');
+      console.log(JSON.stringify(params, null, 2));
+    } catch (settingsError) {
+      console.error('Error loading financial parameters:', settingsError.message);
+    }
+    
     const dataDir = DATA_DIR;
     
     // Read all files in data directory
@@ -1662,13 +1770,10 @@ async function calculateAllVolatilityMetricsCustom() {
           continue;
         }
         
-        // Use only the most recent year of data (approximately 252 trading days)
-        const recentReturns = returnsArray.length > 252 ? 
-          returnsArray.slice(-252) : returnsArray;
-        
         // Calculate volatility and expected return
-        const volatility = calculateVolatility(recentReturns);
-        const expectedReturn = calculateAnnualizedReturn(recentReturns);
+        // The calculateVolatility function will internally limit to volatilityPeriod
+        const volatility = calculateVolatility(returnsArray);
+        const expectedReturn = calculateAnnualizedReturn(returnsArray);
         
         // Check for valid results
         if (!isFinite(volatility) || volatility <= 0 || !isFinite(expectedReturn)) {
@@ -1747,15 +1852,13 @@ async function calculateAllVolatilityMetricsCustom() {
     // Save settings
     try {
       const settingsPath = path.join(__dirname, 'stock_settings.json');
-      let settings = { riskFreeRate: 4.5, stocks: {} };
       
-      // Try to read existing settings
-      try {
-        const settingsData = await fsPromises.readFile(settingsPath, 'utf8');
-        settings = JSON.parse(settingsData);
-      } catch (readErr) {
-        // No settings file, that's okay
-      }
+      // Use settings_loader to get current settings
+      const { loadSettings } = require('./settings_loader');
+      let settings;
+      
+      // Get existing settings - will throw error if not found
+      settings = loadSettings();
       
       // Update settings with calculated values
       for (const symbol in results.settings.stocks) {
@@ -1844,13 +1947,53 @@ function calculateAnnualizedReturn(returns) {
   // Calculate average daily return
   const avgDailyReturn = Math.pow(compoundReturn, 1 / returnValues.length) - 1;
   
+  // Get annualizationFactor from settings
+  let annualizationFactor = 252; // Default value only if settings can't be loaded
+  try {
+    const { getFinancialParameters } = require('./settings_loader');
+    annualizationFactor = getFinancialParameters().annualizationFactor;
+    console.log(`Using annualizationFactor=${annualizationFactor} from settings for return calculation`);
+  } catch (error) {
+    console.error('Error loading annualizationFactor from settings:', error.message);
+    console.error('Using default annualizationFactor=252');
+  }
+  
   // Annualize (compound over trading days in a year)
-  return Math.pow(1 + avgDailyReturn, 252) - 1;
+  return Math.pow(1 + avgDailyReturn, annualizationFactor) - 1;
+}
+
+// Verify parameters at startup
+async function verifySettingsParameters() {
+  try {
+    console.log('Verifying stock_settings.json parameters...');
+    
+    // First ensure required parameters exist
+    const { ensureRequiredParameters, getFinancialParameters } = require('./settings_loader');
+    await ensureRequiredParameters();
+    
+    // Now load and verify them
+    const params = getFinancialParameters();
+    console.log('Verified financial parameters:');
+    console.log(JSON.stringify(params, null, 2));
+    return true;
+  } catch (error) {
+    console.error('Error verifying parameters in stock_settings.json:', error.message);
+    console.error('Please check that your stock_settings.json file includes all required parameters:');
+    console.error('- riskFreeRate');
+    console.error('- marketReturn');
+    console.error('- marketVolatility');
+    console.error('- annualizationFactor');
+    console.error('- volatilityPeriod');
+    return false;
+  }
 }
 
 // Start server
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`Server running at http://localhost:${PORT}/`);
   console.log(`Open your browser to see the Kelly Criterion visualization`);
   console.log(`Using modern data provider architecture for improved data handling`);
+  
+  // Verify parameters on startup
+  await verifySettingsParameters();
 });

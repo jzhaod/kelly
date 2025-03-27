@@ -1,25 +1,97 @@
 {
+  "riskFreeRate": 4.5,
+  "symbols": [
+    "TSLA",
+    "NVDA",
+    "CPNG",
+    "SHOP",
+    "MELI",
+    "RIVN"
+  ],
+  "correlationMatrix": [
+    [
+      1,
+      0.4499247092141707,
+      0.04619939068501142,
+      0.42859454839676037,
+      0.4055731894265545,
+      -0.026522945077615597
+    ],
+    [
+      0.4499247092141707,
+      1,
+      -0.008758717082627914,
+      0.5069617482799272,
+      0.5039149877578621,
+      -0.026830406495235534
+    ],
+    [
+      0.04619939068501142,
+      -0.008758717082627914,
+      1,
+      -0.005454391188357583,
+      0.009651017070814746,
+      -0.03938076625580909
+    ],
+    [
+      0.42859454839676037,
+      0.5069617482799272,
+      -0.005454391188357583,
+      1,
+      0.5388752711771649,
+      0.03144391389500154
+    ],
+    [
+      0.4055731894265545,
+      0.5039149877578621,
+      0.009651017070814746,
+      0.5388752711771649,
+      1,
+      0.05604579665610475
+    ],
+    [
+      -0.026522945077615597,
+      -0.026830406495235534,
+      -0.03938076625580909,
+      0.03144391389500154,
+      0.05604579665610475,
+      1
+    ]
+  ],
   "stocks": {
     "TSLA": {
-      "expectedReturn": 15,
-      "volatility": 55
+      "expectedReturn": 22,
+      "volatility": 65,
+      "beta": 3.26
     },
     "NVDA": {
-      "expectedReturn": 25,
-      "volatility": 45
+      "expectedReturn": 19,
+      "volatility": 54,
+      "beta": 2.7
     },
     "CPNG": {
-      "expectedReturn": 12,
-      "volatility": 40
+      "expectedReturn": 14,
+      "volatility": 35,
+      "beta": 1.75
     },
     "SHOP": {
-      "expectedReturn": 18,
-      "volatility": 50
+      "expectedReturn": 17,
+      "volatility": 44,
+      "beta": 2.22
     },
     "MELI": {
-      "expectedReturn": 20,
-      "volatility": 45
+      "expectedReturn": 16,
+      "volatility": 40,
+      "beta": 2.01
+    },
+    "RIVN": {
+      "expectedReturn": 22,
+      "volatility": 64,
+      "beta": 3.22
     }
   },
-  "riskFreeRate": 4.5
+  "marketReturn": 10,
+  "marketVolatility": 20,
+  "annualizationFactor": 252,
+  "volatilityPeriod": 150
 }

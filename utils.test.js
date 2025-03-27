@@ -4,6 +4,28 @@
 
 const utils = require('./utils');
 
+// Mock settings_loader module
+jest.mock('./settings_loader', () => {
+  const mockGetFinancialParameters = jest.fn().mockReturnValue({
+    riskFreeRate: 0.045,
+    marketReturn: 0.10,
+    marketVolatility: 0.20,
+    annualizationFactor: 252,
+    volatilityPeriod: 150
+  });
+  
+  return {
+    getFinancialParameters: mockGetFinancialParameters,
+    loadSettings: jest.fn().mockReturnValue({
+      riskFreeRate: 4.5,
+      marketReturn: 10,
+      marketVolatility: 20,
+      annualizationFactor: 252,
+      volatilityPeriod: 150
+    })
+  };
+});
+
 // Mocks for testing
 const mockReturns = [0.01, -0.005, 0.02, -0.01, 0.015, -0.02, 0.01];
 const mockPrices = [100, 101, 100.5, 102.5, 101.5, 103, 101];
@@ -29,7 +51,61 @@ describe('calculateVolatility', () => {
     // Volatility should not be massively impacted by the outlier due to filtering
     expect(Math.abs(volatility1 - volatility2)).toBeLessThan(0.1);
   });
+  
+  test('should use annualizationFactor from settings_loader', () => {
+    // The mock returns 252 for annualizationFactor
+    const settingsLoader = require('./settings_loader');
+    const volatility = utils.calculateVolatility(mockReturns);
+    
+    // Check that the settings_loader was called
+    expect(settingsLoader.getFinancialParameters).toHaveBeenCalled();
+    
+    // Calculate manually with the annualization factor from settings
+    const annualizationFactor = settingsLoader.getFinancialParameters().annualizationFactor;
+    const manualVolatility = calculateManualVolatility(mockReturns, annualizationFactor);
+    expect(volatility).toBeCloseTo(manualVolatility, 10);
+  });
+  
+  test('should limit returns based on volatilityPeriod setting', () => {
+    // Reset the mock counter before this test
+    jest.clearAllMocks();
+    
+    const settingsLoader = require('./settings_loader');
+    
+    // Create a longer array of returns to test the limiting behavior
+    const longReturns = Array(300).fill(0).map(() => Math.random() * 0.02 - 0.01);
+    
+    // Calculate volatility
+    const volatility = utils.calculateVolatility(longReturns);
+    
+    // Check that settings_loader was called
+    expect(settingsLoader.getFinancialParameters).toHaveBeenCalled();
+    
+    // The volatility should be calculated using only the last volatilityPeriod returns
+    const volatilityPeriod = settingsLoader.getFinancialParameters().volatilityPeriod;
+    const annualizationFactor = settingsLoader.getFinancialParameters().annualizationFactor;
+    
+    // Calculate manually with the expected returns
+    const limitedReturns = longReturns.slice(-volatilityPeriod);
+    const manualVolatility = calculateManualVolatility(limitedReturns, annualizationFactor);
+    
+    expect(volatility).toBeCloseTo(manualVolatility, 10);
+  });
 });
+
+// Helper function for manual volatility calculation
+function calculateManualVolatility(returns, annualizationFactor) {
+  const filteredReturns = returns.filter(ret => 
+    !isNaN(ret) && isFinite(ret) && ret > -0.20 && ret < 0.20
+  );
+  
+  const meanReturn = filteredReturns.reduce((sum, ret) => sum + ret, 0) / filteredReturns.length;
+  const variance = filteredReturns.reduce((sum, ret) => 
+    sum + Math.pow(ret - meanReturn, 2), 0) / (filteredReturns.length - 1);
+  const stdDev = Math.sqrt(variance);
+  
+  return stdDev * Math.sqrt(annualizationFactor);
+}
 
 describe('calculateExpectedReturnCAPM', () => {
   test('should correctly calculate expected return using CAPM', () => {
@@ -196,7 +272,14 @@ describe('analyzePortfolio', () => {
       'B': { prices: [50, 51, 49, 52, 53] }
     };
     
+    // Reset the mock before testing
+    jest.clearAllMocks();
+    const settingsLoader = require('./settings_loader');
+    
     const analysis = utils.analyzePortfolio(historicalData);
+    
+    // Verify that settings_loader was called
+    expect(settingsLoader.getFinancialParameters).toHaveBeenCalled();
     
     expect(analysis).toHaveProperty('symbols');
     expect(analysis).toHaveProperty('volatility');
@@ -209,6 +292,41 @@ describe('analyzePortfolio', () => {
     expect(analysis.symbols).toContain('B');
     expect(Object.keys(analysis.volatility)).toContain('A');
     expect(Object.keys(analysis.expectedReturns)).toContain('A');
+  });
+  
+  test('should use provided parameters when specified', () => {
+    const historicalData = {
+      'A': { prices: [100, 102, 101, 104, 105] },
+      'B': { prices: [50, 51, 49, 52, 53] }
+    };
+    
+    // Reset the mock before testing
+    jest.clearAllMocks();
+    const settingsLoader = require('./settings_loader');
+    
+    // Use custom parameters
+    const customRiskFreeRate = 0.05;
+    const customMarketReturn = 0.12;
+    
+    const analysis = utils.analyzePortfolio(historicalData, customRiskFreeRate, customMarketReturn);
+    
+    // Verify that settings_loader was still called for marketVolatility
+    expect(settingsLoader.getFinancialParameters).toHaveBeenCalled();
+    
+    // Market volatility should come from the mock
+    const { marketVolatility } = settingsLoader.getFinancialParameters();
+    
+    // Check that a stock's beta uses the expected market volatility
+    const stockVolatility = analysis.volatility['A'];
+    const expectedBeta = stockVolatility / marketVolatility;
+    expect(analysis.beta['A']).toBeCloseTo(expectedBeta, 10);
+    
+    // Check that expected returns use our custom risk-free rate and market return
+    const beta = analysis.beta['A'];
+    const expectedReturn = customRiskFreeRate + beta * (customMarketReturn - customRiskFreeRate);
+    // Account for the 0-60% bounds in the calculateExpectedReturnCAPM function
+    const boundedExpectedReturn = Math.max(0, Math.min(0.60, expectedReturn));
+    expect(analysis.expectedReturns['A']).toBeCloseTo(boundedExpectedReturn, 10);
   });
   
   test('should handle missing or invalid data', () => {
