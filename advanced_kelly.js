@@ -380,84 +380,9 @@ async function fetchHistoricalData(symbols, lookbackPeriod = 252) {
   return historicalData;
 }
 
-/**
- * Calculates returns from price data
- * @param {Object} priceData - Historical price data
- * @returns {Object} - Daily returns
- */
-function calculateReturns(priceData) {
-  const returns = {};
-  
-  for (const symbol of Object.keys(priceData)) {
-    const prices = priceData[symbol].prices;
-    returns[symbol] = [];
-    
-    for (let i = 1; i < prices.length; i++) {
-      const dailyReturn = (prices[i-1] / prices[i]) - 1;
-      returns[symbol].push(dailyReturn);
-    }
-  }
-  
-  return returns;
-}
+// These functions have been moved to utils.js
 
-/**
- * Calculates volatility from returns
- * @param {Object} returns - Daily returns
- * @param {Number} annualizationFactor - Factor to annualize (252 for daily data)
- * @returns {Object} - Annualized volatility
- */
-function calculateVolatility(returns, annualizationFactor = 252) {
-  const volatility = {};
-  
-  for (const symbol of Object.keys(returns)) {
-    const symbolReturns = returns[symbol];
-    const mean = symbolReturns.reduce((sum, ret) => sum + ret, 0) / symbolReturns.length;
-    
-    const variance = symbolReturns.reduce((sum, ret) => {
-      return sum + Math.pow(ret - mean, 2);
-    }, 0) / (symbolReturns.length - 1);
-    
-    volatility[symbol] = Math.sqrt(variance * annualizationFactor);
-  }
-  
-  return volatility;
-}
-
-/**
- * Calculates correlation matrix from returns
- * This function has been moved to utils.js to avoid duplication
- * @param {Object} returns - Daily returns
- * @returns {Array} - Correlation matrix
- */
-function calculateCorrelationMatrix(returns) {
-  // Import the utility function
-  const { calculateCorrelationMatrix } = require('./utils');
-  return calculateCorrelationMatrix(returns).correlationMatrix;
-}
-
-/**
- * Calculates expected returns based on historical data and adjustments
- * @param {Object} returns - Daily returns
- * @param {Number} annualizationFactor - Factor to annualize (252 for daily data)
- * @param {Object} adjustments - Optional adjustments to expected returns
- * @returns {Object} - Expected annual returns
- */
-function calculateExpectedReturns(returns, annualizationFactor = 252, adjustments = {}) {
-  const expectedReturns = {};
-  
-  for (const symbol of Object.keys(returns)) {
-    const symbolReturns = returns[symbol];
-    const meanDaily = symbolReturns.reduce((sum, ret) => sum + ret, 0) / symbolReturns.length;
-    const annualizedReturn = ((1 + meanDaily) ** annualizationFactor) - 1;
-    
-    // Apply any adjustments specified
-    const adjustment = adjustments[symbol] || 0;
-    expectedReturns[symbol] = annualizedReturn + adjustment;
-  }
-  
-  return expectedReturns;
-}
+// These functions have been moved to utils.js
 
 /**
  * Main function to run the advanced Kelly allocation
@@ -470,21 +395,54 @@ async function runAdvancedKellyAllocation(symbols, portfolioSize = 1000, returnA
     // Fetch historical data
     const historicalData = await fetchHistoricalData(symbols);
     
-    // Calculate returns from price data
-    const returns = calculateReturns(historicalData);
+    // Import utility functions
+    const { 
+      calculateDailyReturns, 
+      calculateVolatility, 
+      calculateCorrelationMatrix,
+      calculateExpectedReturnCAPM
+    } = require('./utils');
     
-    // Calculate volatility
-    const volatility = calculateVolatility(returns);
+    // Process returns data
+    const returns = {};
+    const volatility = {};
+    
+    // Process each symbol
+    for (const symbol of Object.keys(historicalData)) {
+      if (historicalData[symbol] && historicalData[symbol].prices && historicalData[symbol].prices.length > 1) {
+        // Calculate daily returns for each symbol
+        returns[symbol] = calculateDailyReturns(historicalData[symbol].prices);
+        
+        // Calculate volatility for each symbol
+        if (returns[symbol] && returns[symbol].length > 1) {
+          volatility[symbol] = calculateVolatility(returns[symbol], 252);
+        }
+      }
+    }
     
     // Calculate correlation matrix
-    // The utility function returns {correlationMatrix, symbols} so we need to extract just the matrix
-    const correlationMatrix = calculateCorrelationMatrix(returns);
+    const correlationResult = calculateCorrelationMatrix(returns);
+    const correlationMatrix = correlationResult.correlationMatrix;
     
-    // Calculate expected returns (with optional adjustments)
-    const expectedReturns = calculateExpectedReturns(returns, 252, returnAdjustments);
-    
-    // Risk-free rate (e.g., current 10-year Treasury yield)
+    // Risk-free rate and market return for CAPM
     const riskFreeRate = 0.045; // 4.5%
+    const marketReturn = 0.10;  // 10%
+    const marketVolatility = 0.20; // Market volatility estimate
+    
+    // Calculate expected returns with CAPM model and adjustments
+    const expectedReturns = {};
+    for (const symbol of Object.keys(volatility)) {
+      // Calculate beta as volatility ratio (simplified approach)
+      const beta = volatility[symbol] / marketVolatility;
+      
+      // Calculate expected return using CAPM
+      expectedReturns[symbol] = calculateExpectedReturnCAPM(beta, riskFreeRate, marketReturn);
+      
+      // Apply any adjustments specified
+      if (returnAdjustments[symbol]) {
+        expectedReturns[symbol] += returnAdjustments[symbol];
+      }
+    }
     
     console.log('Expected Returns:', expectedReturns);
     console.log('Volatility:', volatility);
@@ -596,9 +554,5 @@ module.exports = {
   calculateAdvancedKelly,
   calculateSimplifiedKelly,
   fetchHistoricalData,
-  calculateReturns,
-  calculateVolatility,
-  calculateCorrelationMatrix,
-  calculateExpectedReturns,
   runAdvancedKellyAllocation
 };

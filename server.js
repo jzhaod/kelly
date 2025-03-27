@@ -41,11 +41,7 @@ const {
 // Import advanced Kelly criterion module
 const {
   calculateAdvancedKelly,
-  calculateSimplifiedKelly,
-  calculateReturns,
-  calculateVolatility: calcKellyVolatility,
-  calculateCorrelationMatrix: kellyCorrelationMatrix,
-  calculateExpectedReturns
+  calculateSimplifiedKelly
 } = require('./advanced_kelly');
 
 const MIME_TYPES = {
