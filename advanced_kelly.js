@@ -553,18 +553,6 @@ async function runAdvancedKellyAllocation(symbols, portfolioSize = 1000, returnA
   }
 }
 
-// Example usage
-const symbols = ['TSLA', 'NVDA', 'CPNG', 'SHOP', 'MELI'];
-const returnAdjustments = {
-  'TSLA': 0.03,  // Adjust Tesla's expected return up by 3%
-  'NVDA': 0.05   // Adjust NVIDIA's expected return up by 5%
-};
-
-// Uncomment to run the analysis
-runAdvancedKellyAllocation(symbols, 1000, returnAdjustments)
-   .then(results => console.log('Analysis complete'))
-   .catch(error => console.error('Analysis failed:', error));
-
 module.exports = {
   calculateAdvancedKelly,
   calculateSimplifiedKelly,
